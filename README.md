@@ -6,4 +6,4 @@ Para no tener que hacer esto hay que solucionar el problema de metodos no Bloque
 
 Recive por argumento el puerto al cual de va a hacer bind el server
 
-Pasar esto al bitbuuet de la catedra
+Pasar esto al bitbucket de la catedra
