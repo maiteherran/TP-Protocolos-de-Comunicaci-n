@@ -7,8 +7,10 @@
 
 #include <unistd.h>
 #include <stdio.h>
+#include <sys/time.h>
 #include <sys/socket.h>
 #include <stdlib.h>
+#include<fcntl.h>
 #include <netinet/in.h>
 #include <string.h>
 
@@ -22,7 +24,7 @@ struct t_request {
 };
 
 int server(int port);
-struct t_request handleClientRequest(FILE* requestReadfp);
+struct t_request handleClientRequest(int requestReadfp);
 void freeRequest(struct t_request request);
 int client(char* hostname, size_t port);
 void trim( char* line );

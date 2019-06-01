@@ -41,13 +41,13 @@ int server(int port) {
         printf("cliente conectado\n");
         if (requestSocket < 0) {
             perror("accept");
-            exit(EXIT_FAILURE);
+            continue;
         }
 
-        FILE* requestWritefp = fdopen(requestSocket, "w");
-        FILE* requestReadfp = fdopen(requestSocket, "r");
+        struct t_request request = handleClientRequest(requestSocket);
 
-        struct t_request request = handleClientRequest(requestReadfp);
+        FILE* requestReadfp = fdopen(requestSocket, "r");
+        FILE* requestWritefp = fdopen(requestSocket, "w");
 
         if (!request.bad_request) {
             printf("t_request\n");
@@ -57,28 +57,31 @@ int server(int port) {
             printf("the port is %i\n", (int)request.port);
             printf("HTTP version is 1.%d\n", request.version);
             printf("headers:\n");
-            for (int i = 0; i != request.num_headers; ++i) {
-                printf("%.*s: %.*s\n", (int)request.headers[i].name_len, request.headers[i].name,
-                       (int)request.headers[i].value_len, request.headers[i].value);
+            for (int i = 0; i != request.num_headers; i++) {
+                printf("%.*s: %.*s\n", (int)request.headers[i].name_len, request.headers[i].name, (int)request.headers[i].value_len, request.headers[i].value);
             }
+        } else {
+            printf("Bad Request\n");
+            continue;
         }
 
         int originServerSocket = client(request.host, request.port);
         if (originServerSocket < 0) {
             perror("accept");
-            exit(EXIT_FAILURE);
+            continue;
         }
 
         FILE* originWrite = fdopen(originServerSocket, "w");
         FILE* originRead = fdopen(originServerSocket, "r");
 
         do_http_request(request, "HTTP/1.1", originWrite);
-        do_http_response(requestWritefp, originRead);
+        do_http_response(requestWritefp, originRead); // TODO: hacerlo no bloqueante
 
         fclose(originWrite);
         fclose(originRead);
         fclose(requestReadfp);
         fclose(requestWritefp);
+
         close(originServerSocket);
         close(requestSocket);
 
@@ -87,11 +90,32 @@ int server(int port) {
     return 0;
 }
 
-struct t_request handleClientRequest(FILE* requestReadfp) {
+struct t_request handleClientRequest(int requestReadfp) {
     char buffer[BUFFER] = {0};//"GET http://www.w3.org/pub/WWW/TheProject.html HTTP/1.1\r\n\r\n"; //"GET /pub/WWW/TheProject.html HTTP/1.1\r\nHost: www.w3.org\r\n\r\n";
     struct t_request request;
-    fread(buffer, sizeof(char), BUFFER, requestReadfp);
+
+    //fread(buffer, sizeof(char), BUFFER, requestReadfp);
+
+    fd_set fds;
+    struct timeval timeout;
+    timeout.tv_sec = 1; /* timeout in secs */
+    timeout.tv_usec = 0;
+    FD_ZERO(&fds);
+    FD_SET(requestReadfp, &fds);
+    ssize_t totalRead = 0;
+    ssize_t sizeRead  = 0;
+
+    if (select(requestReadfp + 1, &fds, NULL, NULL, &timeout) > 0) {  // espero contenido del request, voy leyendo hasta que se llene el buffer o me deja de mandar cosas, TODO: mejorar el metodo no bloqueante
+        sizeRead = read(requestReadfp, buffer + totalRead, BUFFER);
+        totalRead += sizeRead;
+        if (totalRead > BUFFER) {
+            request.bad_request = 1;
+            return request;
+        }
+    }
+
     printf("%s\n", buffer);
+
     char const *method, *path;
     int pret, minor_version;
     struct phr_header * headers = (struct phr_header *) calloc(50, sizeof(struct phr_header));
@@ -119,7 +143,7 @@ struct t_request handleClientRequest(FILE* requestReadfp) {
     unsigned short cport = 80;
     char hostaux[BUFFER], pathaux[BUFFER];
     if ( strncasecmp(request.path, "http://", 7 ) == 0) {
-        (void) strncpy(request.path, "http", 4 );
+        strncpy(request.path, "http", 4 );
         if ( sscanf(request.path, "http://%[^:/]:%d%s", hostaux, &iport, pathaux ) == 3)
             cport = (unsigned short) iport;
         else if (sscanf(request.path, "http://%[^/]%s", hostaux, pathaux ) == 2) {
@@ -134,21 +158,28 @@ struct t_request handleClientRequest(FILE* requestReadfp) {
         } else {
             printf("Bad request\n");
         }
-        request.port = cport;
+        request.port = 80;//cport;
         strcpy(request.path, pathaux);
         strcpy(request.host, hostaux);
     } else {
         int found = 0;
         for (int i = 0; i != request.num_headers; ++i) {
-            if (strcasecmp(request.headers[i].name, "Host") == 0) {
+            if (strncasecmp(request.headers[i].name, "Host", request.headers[i].name_len) == 0) {
                 stpncpy(request.host, request.headers[i].value, request.headers[i].value_len);
+                char * hostName = strtok(request.host, ":");
+                char * port = strtok(NULL, ":");
+                if (port) {
+                    request.port = (size_t)atoi(port);
+                    request.port = 80; //80 para mi nginx
+                } else {
+                    request.port = 80;
+                }
                 found = 1;
             }
         }
         if (!found) {
             request.bad_request = 1;
         }
-        request.port = 80;
     }
     return  request;
 }
@@ -187,32 +218,36 @@ void do_http_request(struct t_request request, char* protocol,  FILE* originWrit
     printf("pedi esto\n");
     printf("%s %s %s\n", request.method, request.path, protocol);
     printf("Host: %s\n", request.host);
-    (void) fprintf(originWritefp, "%s %s %s\r\n", request.method, request.path, protocol);
-    (void) fprintf(originWritefp, "Host: %s\r\n", request.host);
-//    (void) fputs( "Connection: close\r\n", );
-    (void) fflush(originWritefp);
-    for (int i = 0; i != request.num_headers; ++i) {
-        if (strcasecmp(request.headers[i].name, "Host") == 0) {
+    fprintf(originWritefp, "%s %s %s\r\n", request.method, request.path, protocol);
+    fprintf(originWritefp, "Host: %s\r\n", request.host);
+    fflush(originWritefp);
+
+    //todo: no estoy agregando los headers del request, por algun motivo aca se borro el contenido de request.headers averiguar que onda
+    /*
+     for (int i = 0; i != request.num_headers; i++) {
+        if (strncasecmp(request.headers[i].name, "Host", request.headers[i].name_len) != 0) {
+            fprintf(originWritefp, "%.*s: %.*s\n", (int)request.headers[i].name_len, request.headers[i].name, (int)request.headers[i].value_len, request.headers[i].value);
             printf("%.*s: %.*s\n", (int)request.headers[i].name_len, request.headers[i].name, (int)request.headers[i].value_len, request.headers[i].value);
-            fprintf(originWritefp,"%.*s: %.*s\r\n", (int)request.headers[i].name_len, request.headers[i].name, (int)request.headers[i].value_len, request.headers[i].value);
-            (void) fflush(originWritefp);
+            fflush(originWritefp);
         }
     }
+    */
+
     fprintf(originWritefp, "\r\n");
-    (void) fflush(originWritefp);
+    fflush(originWritefp);
 }
 
 void do_http_response(FILE* clientWritefp, FILE* originReadfp) {
     size_t length;
     char * line = fgetln(originReadfp, &length);
-    (void) fprintf(clientWritefp, "%.*s", (int)length, line); // agregamos la primera linea con el http status asi luego podemos poner el header Connection: close
-    (void) fputs("Connection: close\r\n", clientWritefp);
-    (void) fflush(clientWritefp);
+    fprintf(clientWritefp, "%.*s", (int)length, line); // agregamos la primera linea con el http status asi luego podemos poner el header Connection: close
+    fputs("Connection: close\r\n", clientWritefp);
+    fflush(clientWritefp);
     while ((line = fgetln(originReadfp, &length)) != (char*) 0 && length > 0) {
-        (void) fprintf(clientWritefp, "%.*s", (int)length, line);
-        (void) fflush(clientWritefp);
+        fprintf(clientWritefp, "%.*s", (int)length, line);
+        fflush(clientWritefp);
     }
-    (void) fflush(clientWritefp);
+    fflush(clientWritefp);
 }
 
 void trim(char * line) {
