@@ -46,7 +46,7 @@ int server(int port) {
 
         struct t_request request = handleClientRequest(requestSocket);
 
-        FILE* requestReadfp = fdopen(requestSocket, "r");
+//        FILE* requestReadfp = fdopen(requestSocket, "r");
         FILE* requestWritefp = fdopen(requestSocket, "w");
 
         if (!request.bad_request) {
@@ -79,7 +79,7 @@ int server(int port) {
 
         fclose(originWrite);
         fclose(originRead);
-        fclose(requestReadfp);
+//        fclose(requestReadfp);
         fclose(requestWritefp);
 
         close(originServerSocket);
@@ -94,11 +94,19 @@ struct t_request handleClientRequest(int requestReadfp) {
     char buffer[BUFFER] = {0};//"GET http://www.w3.org/pub/WWW/TheProject.html HTTP/1.1\r\n\r\n"; //"GET /pub/WWW/TheProject.html HTTP/1.1\r\nHost: www.w3.org\r\n\r\n";
     struct t_request request;
 
-    //fread(buffer, sizeof(char), BUFFER, requestReadfp);
 
+    //DESCOMENTAR si vas a usar netcat
+
+    FILE* requestRead = fdopen(requestReadfp, "r");
+    fread(buffer, sizeof(char), BUFFER, requestRead);
+
+    //    read(requestReadfp, buffer, BUFFER);
+
+    //DESCOMENTAR si vas a usar curl, configura para que los request vayan a tu proxy
+    /*
     fd_set fds;
     struct timeval timeout;
-    timeout.tv_sec = 1; /* timeout in secs */
+    timeout.tv_sec = 1;
     timeout.tv_usec = 0;
     FD_ZERO(&fds);
     FD_SET(requestReadfp, &fds);
@@ -113,7 +121,7 @@ struct t_request handleClientRequest(int requestReadfp) {
             return request;
         }
     }
-
+     */
     printf("%s\n", buffer);
 
     char const *method, *path;
