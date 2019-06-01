@@ -5,3 +5,5 @@ Descomentar codigo en la funcion handleClientRequest segun si van a usar netcat 
 Para no tener que hacer esto hay que solucionar el problema de metodos no Bloqueantes.
 
 Recive por argumento el puerto al cual de va a hacer bind el server
+
+Pasar esto al bitbuuet de la catedra
