@@ -610,18 +610,9 @@ request_write(struct selector_key *key) {
 
 
     FILE* originWrite = fdopen(ATTACHMENT(key)->origin_fd, "w");
-//    FILE* originRead = fdopen(ATTACHMENT(key)->origin_fd, "r");
-//    FILE* requestWritefp = fdopen(ATTACHMENT(key)->client_fd, "w");
 
     do_http_request(d->request, "HTTP/1.1", originWrite);
     selector_set_interest_key(key, OP_READ);
-
-//    do_http_response(requestWritefp, originRead); // TODO: hacerlo no bloqueante
-
-
-//    fclose(originWrite);
-//    fclose(originRead);
-//    fclose(requestWritefp);
 
     return RESPONSE_READ; //TODO: estoy asumiendo que se escribio todo el request
 }
@@ -660,9 +651,15 @@ static unsigned do_http_response(FILE* clientWritefp, FILE* originReadfp, int * 
         fflush(clientWritefp);
     }
     fflush(clientWritefp);
+    // TODO: esto del feof no esta funcinoando, tendira que ver si esta el header content length para saber cuando cerrar y ademas considerar el caso chunked
+    line = fgetln(originReadfp, &length); // leo de nuevo para ver si me llego EOF
     if (feof(originReadfp)) {
         return DONE;
-    } else {
+    } else { // lei algo y no era feof, lo agrego
+        if (length > 0) {
+            fprintf(clientWritefp, "%.*s", (int)length, line);
+            fflush(clientWritefp);
+        }
         return RESPONSE_READ;
     }
 }
@@ -674,11 +671,6 @@ response_read(struct selector_key *key) {
     struct response_st * r = &ATTACHMENT(key)->orig.response;
 
     return do_http_response(r->client_wfp, r->origin_rfp, &r->is_header_close);
-
-//    fclose(originRead);
-//    fclose(requestWritefp);
-
-    //return DONE;
 }
 
 
