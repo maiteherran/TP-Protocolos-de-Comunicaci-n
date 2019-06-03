@@ -12,10 +12,7 @@
 
 #include <arpa/inet.h>
 
-#include "hello.h"
-#include "request.h"
 #include "buffer.h"
-
 #include "stm.h"
 #include "socks5nio.h"
 
@@ -76,6 +73,7 @@ enum socks_v5state {
      * Transicion:
      *   - DONE     cuando no queda nada mas por copiar.
      */
+    RESPONSE_READ,
 //    COPY,
 
     // estados terminales
@@ -111,6 +109,15 @@ struct request_st {
     const int                 *client_fd;
     int                       *origin_fd;
 };
+
+struct response_st {
+    FILE                      *origin_rfp;
+    FILE                      *client_wfp;
+    int                       is_header_close;
+    const int                 *client_fd;
+    int                       *origin_fd;
+};
+
 
 /** usado por REQUEST_CONNECTING */
 struct connecting {
@@ -157,6 +164,7 @@ struct socks5 {
     } client;
     /** estados para el origin_fd */
     union {
+        struct response_st        response;
         struct connecting         conn;
     } orig;
 
@@ -284,7 +292,7 @@ void
 socksv5_passive_accept(struct selector_key *key) {
     struct sockaddr_storage       client_addr;
     socklen_t                     client_addr_len = sizeof(client_addr);
-    struct socks5                *state           = NULL;
+    struct socks5                 *state          = NULL;
 
     const int client = accept(key->fd, (struct sockaddr*) &client_addr, &client_addr_len);
     if(client == -1) {
@@ -321,7 +329,7 @@ fail:
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// REQUEST
+// REQUEST_READ
 ////////////////////////////////////////////////////////////////////////////////
 static void *
 request_resolv_blocking(void * data);
@@ -361,9 +369,7 @@ request_read(struct selector_key *key) {
     if(n > 0) {
         buffer_write_adv(b, n);
     } else if (n == 0) {  // se leyo EOF
-
         return request_process(key, d);
-
     } else {
         ret = ERROR;
     }
@@ -432,7 +438,7 @@ request_process(struct selector_key* key, struct request_st* d) {
                 char * port = strtok(NULL, ":");
                 if (port) {
                     d->request.port = (size_t)atoi(port);
-                    d->request.port = 80; //TODO: 80 para mi nginx
+                   // d->request.port = 80; //TODO: 80 para mi nginx
                 } else {
                     d->request.port = 80;
                 }
@@ -534,6 +540,7 @@ request_connect(struct selector_key *key, struct request_st *d) {
             }
 
             // esperamos la conexion en el nuevo socket
+            // polleamos el socket del origin server
             st = selector_register(key->s, *fd, &socks5_handler,
                                    OP_WRITE, key->data);
             if(SELECTOR_SUCCESS != st) {
@@ -563,6 +570,10 @@ request_connect(struct selector_key *key, struct request_st *d) {
     return REQUEST_WRITE;
 }
 
+////////////////////////////////////////////////////////////////////////////////
+// REQUEST_WRITE
+////////////////////////////////////////////////////////////////////////////////
+
 void do_http_request(struct t_request request, char* protocol,  FILE* originWritefp) {
     /* Send t_request. */
     printf("pedi esto\n");
@@ -587,20 +598,6 @@ void do_http_request(struct t_request request, char* protocol,  FILE* originWrit
     fflush(originWritefp);
 }
 
-void do_http_response(FILE* clientWritefp, FILE* originReadfp) {
-    size_t length;
-    char * line = fgetln(originReadfp, &length);
-    fprintf(clientWritefp, "%.*s", (int)length, line); // agregamos la primera linea con el http status asi luego podemos poner el header Connection: close
-    fputs("Connection: close\r\n", clientWritefp);
-    fflush(clientWritefp);
-    while ((line = fgetln(originReadfp, &length)) != (char*) 0 && length > 0) {
-        fprintf(clientWritefp, "%.*s", (int)length, line);
-        fflush(clientWritefp);
-    }
-    fflush(clientWritefp);
-}
-
-
 static unsigned
 request_write(struct selector_key *key) {
     struct request_st * d = &ATTACHMENT(key)->client.request;
@@ -613,19 +610,77 @@ request_write(struct selector_key *key) {
 
 
     FILE* originWrite = fdopen(ATTACHMENT(key)->origin_fd, "w");
-    FILE* originRead = fdopen(ATTACHMENT(key)->origin_fd, "r");
-    FILE* requestWritefp = fdopen(ATTACHMENT(key)->client_fd, "w");
+//    FILE* originRead = fdopen(ATTACHMENT(key)->origin_fd, "r");
+//    FILE* requestWritefp = fdopen(ATTACHMENT(key)->client_fd, "w");
 
     do_http_request(d->request, "HTTP/1.1", originWrite);
-    do_http_response(requestWritefp, originRead); // TODO: hacerlo no bloqueante
+    selector_set_interest_key(key, OP_READ);
+
+//    do_http_response(requestWritefp, originRead); // TODO: hacerlo no bloqueante
 
 
-    fclose(originWrite);
-    fclose(originRead);
-    fclose(requestWritefp);
+//    fclose(originWrite);
+//    fclose(originRead);
+//    fclose(requestWritefp);
 
-    return ret;
+    return RESPONSE_READ; //TODO: estoy asumiendo que se escribio todo el request
 }
+
+////////////////////////////////////////////////////////////////////////////////
+// RESPONSE_READ
+////////////////////////////////////////////////////////////////////////////////
+
+/** inicializa las variables de los estados RESPONSE_… */
+static void
+response_init(const unsigned state, struct selector_key *key) {
+    struct response_st * r = &ATTACHMENT(key)->orig.response;
+
+    r->client_fd       = &ATTACHMENT(key)->client_fd;
+    r->origin_fd       = &ATTACHMENT(key)->origin_fd;
+
+    r->client_wfp      = fdopen(ATTACHMENT(key)->client_fd, "w");
+    r->origin_rfp      = fdopen(ATTACHMENT(key)->origin_fd, "r");
+
+    r->is_header_close = 0;
+}
+
+
+static unsigned do_http_response(FILE* clientWritefp, FILE* originReadfp, int * is_header_close) {
+    size_t length;
+    char * line;
+    if (!(*is_header_close)) {
+        line = fgetln(originReadfp, &length);
+        fprintf(clientWritefp, "%.*s", (int)length, line); // agregamos la primera linea con el http status asi luego podemos poner el header Connection: close
+        fputs("Connection: close\r\n", clientWritefp);
+        fflush(clientWritefp);
+        *is_header_close = 1;
+    }
+    while ((line = fgetln(originReadfp, &length)) != (char*) 0 && length > 0) {
+        fprintf(clientWritefp, "%.*s", (int)length, line);
+        fflush(clientWritefp);
+    }
+    fflush(clientWritefp);
+    if (feof(originReadfp)) {
+        return DONE;
+    } else {
+        return RESPONSE_READ;
+    }
+}
+
+
+/** lee todos los bytes del mensaje de tipo `request' y inicia su proceso */
+static unsigned
+response_read(struct selector_key *key) {
+    struct response_st * r = &ATTACHMENT(key)->orig.response;
+
+    return do_http_response(r->client_wfp, r->origin_rfp, &r->is_header_close);
+
+//    fclose(originRead);
+//    fclose(requestWritefp);
+
+    //return DONE;
+}
+
 
 /** definición de handlers para cada estado */
 static const struct state_definition client_statbl[] = {
@@ -639,6 +694,10 @@ static const struct state_definition client_statbl[] = {
     }, {
         .state            = REQUEST_WRITE,
         .on_write_ready   = request_write,
+    }, {
+        .state            = RESPONSE_READ,
+        .on_arrival       = response_init,
+        .on_read_ready    = response_read,
     }, {
         .state            = DONE,
 

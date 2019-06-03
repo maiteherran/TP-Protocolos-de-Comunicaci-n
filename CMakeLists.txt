@@ -4,8 +4,6 @@ project(ProbandoTpProtos C)
 set(CMAKE_C_STANDARD 99)
 
 add_executable(ProbandoTpProtos main.c main.h Parser/picohttpparser.c Parser/picohttpparser.h
-        Utils/hello.c Utils/hello.h
-        Utils/request.c Utils/request.h
         Utils/netutils.c Utils/netutils.h
         Utils/buffer.c Utils/buffer.h
         Utils/selector.c Utils/selector.h
