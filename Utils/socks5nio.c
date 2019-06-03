@@ -145,7 +145,8 @@ struct socks5 {
     socklen_t                     origin_addr_len;
     int                           origin_domain;
     int                           origin_fd;
-
+    int                           origin_type;
+    int                           origin_protocol;
 
     /** maquinas de estados */
     struct state_machine          stm;
@@ -322,6 +323,8 @@ fail:
 ////////////////////////////////////////////////////////////////////////////////
 // REQUEST
 ////////////////////////////////////////////////////////////////////////////////
+static void *
+request_resolv_blocking(void * data);
 
 /** inicializa las variables de los estados REQUEST_… */
 static void
@@ -359,39 +362,7 @@ request_read(struct selector_key *key) {
         buffer_write_adv(b, n);
     } else if (n == 0) {  // se leyo EOF
 
-        request_process(key, d);
-
-
-        printf("host: %s, port: %i\n", d->request.host, (int)d->request.port);
-        char portToString[BUFFER_SIZE];
-        sprintf(portToString, "%d", (int)d->request.port);
-
-        struct addrinfo addrCriteria;
-        memset(&addrCriteria, 0, sizeof(addrCriteria));
-        addrCriteria.ai_family   = AF_UNSPEC;
-        addrCriteria.ai_socktype = SOCK_STREAM;
-        addrCriteria.ai_protocol = IPPROTO_TCP;
-
-        struct addrinfo *addrList;
-        int dnsStatus = getaddrinfo(d->request.host, portToString, &addrCriteria, &addrList);
-        if (dnsStatus != 0) {
-            printf("Unknown host.\n");
-            return ERROR;
-        }
-
-        int clientSocket = socket(addrList->ai_family, addrList->ai_socktype, addrList->ai_protocol);
-        int connectStatus = connect(clientSocket, addrList->ai_addr, addrList->ai_addrlen);
-        freeaddrinfo(addrList);
-        if (connectStatus < 0) {
-            close(clientSocket);
-            printf("Service unavailable");
-            return ERROR;
-        }
-
-        int *fd = &ATTACHMENT(key)->origin_fd;
-        *fd = clientSocket;
-        selector_set_interest_key(key, OP_WRITE);
-        return REQUEST_WRITE;
+        return request_process(key, d);
 
     } else {
         ret = ERROR;
@@ -404,8 +375,6 @@ request_process(struct selector_key* key, struct request_st* d) {
     size_t to_read;
     char * buffer = (char *)buffer_read_ptr(d->rb, &to_read);
     printf("%s", buffer);
-
-    pthread_t tid; //TODO: que onda este thread
 
     char const *method, *path;
     int pret, minor_version;
@@ -475,8 +444,123 @@ request_process(struct selector_key* key, struct request_st* d) {
             return ERROR;
         }
     }
-//    selector_set_interest_key(key, OP_NOOP);
-    return  REQUEST_WRITE; // TODO: estoy ingonradno esto
+    pthread_t tid;
+    struct selector_key* k = malloc(sizeof(*key));
+    memcpy(k, key, sizeof(*k));
+    pthread_create(&tid, 0, request_resolv_blocking, k);
+    selector_set_interest_key(key, OP_NOOP);
+    return  REQUEST_RESOLV;
+}
+
+
+////////////////////////////////////////////////////////////////////////////////
+// RESOLVE
+////////////////////////////////////////////////////////////////////////////////
+static unsigned
+request_connect(struct selector_key *key, struct request_st *d);
+static unsigned
+request_resolv_done(struct selector_key *key);
+
+static void *
+request_resolv_blocking(void * data) {
+    struct selector_key *key = (struct selector_key *) data;
+    struct socks5       *s   = ATTACHMENT(key);
+    struct request_st   *d   = &ATTACHMENT(key)->client.request;
+
+    printf("host: %s, port: %i\n", d->request.host, (int)d->request.port);
+
+    pthread_detach(pthread_self());
+    s->origin_resolution = 0;
+
+    char portToString[BUFFER_SIZE];
+    sprintf(portToString, "%d", (int)d->request.port);
+
+    struct addrinfo addrCriteria;
+    memset(&addrCriteria, 0, sizeof(addrCriteria));
+    addrCriteria.ai_family   = AF_UNSPEC;
+    addrCriteria.ai_socktype = SOCK_STREAM;
+    addrCriteria.ai_protocol = IPPROTO_TCP;
+
+    getaddrinfo(d->request.host, portToString, &addrCriteria, &s->origin_resolution);
+
+    selector_notify_block(key->s, key->fd);
+
+    free(data);
+
+    return 0;
+}
+
+static unsigned
+request_resolv_done(struct selector_key *key) {
+    struct request_st * d = &ATTACHMENT(key)->client.request;
+    struct socks5 *s      =  ATTACHMENT(key);
+
+    s->origin_domain   = s->origin_resolution->ai_family;
+    s->origin_addr_len = s->origin_resolution->ai_addrlen;
+    s->origin_type     = s->origin_resolution->ai_socktype;
+    s->origin_protocol = s->origin_resolution->ai_protocol;
+    memcpy(&s->origin_addr,
+            s->origin_resolution->ai_addr,
+            s->origin_resolution->ai_addrlen);
+    freeaddrinfo(s->origin_resolution);
+    s->origin_resolution = 0;
+
+    return request_connect(key, d);
+}
+
+static unsigned
+request_connect(struct selector_key *key, struct request_st *d) {
+    bool error                  = false;
+    int *fd                     =  d->origin_fd;
+    struct socks5 *s            =  ATTACHMENT(key);
+
+    *fd = socket(s->origin_domain, s->origin_type, s->origin_protocol);
+    if (*fd == -1) {
+        error = true;
+        goto finally;
+    }
+    if (selector_fd_set_nio(*fd) == -1) {
+        goto finally;
+    }
+    if (-1 == connect(*fd, (const struct sockaddr *)&s->origin_addr, s->origin_addr_len)) {
+        if(errno == EINPROGRESS) {
+            // es esperable,  tenemos que esperar a la conexión
+
+            // dejamos de de pollear el socket del cliente
+            selector_status st = selector_set_interest_key(key, OP_NOOP);
+            if(SELECTOR_SUCCESS != st) {
+                error = true;
+                goto finally;
+            }
+
+            // esperamos la conexion en el nuevo socket
+            st = selector_register(key->s, *fd, &socks5_handler,
+                                   OP_WRITE, key->data);
+            if(SELECTOR_SUCCESS != st) {
+                error = true;
+                goto finally;
+            }
+            ATTACHMENT(key)->references += 1;
+        } else {
+            error = true;
+            goto finally;
+        }
+    } else {
+        // estamos conectados sin esperar... no parece posible
+        // saltaríamos directamente a COPY
+        abort(); //TODO: nose que hce esto
+    }
+
+    finally:
+    if (error) {
+        if (*fd != -1) {
+            close(*fd);
+            *fd = -1;
+        }
+        return ERROR; // TODO: lo puse yo, no majeamos status hasta ahora
+    }
+
+    return REQUEST_WRITE;
 }
 
 void do_http_request(struct t_request request, char* protocol,  FILE* originWritefp) {
@@ -549,6 +633,9 @@ static const struct state_definition client_statbl[] = {
         .state            = REQUEST_READ,
         .on_arrival       = request_init,
         .on_read_ready    = request_read,
+    },{
+        .state            = REQUEST_RESOLV,
+        .on_block_ready   = request_resolv_done,
     }, {
         .state            = REQUEST_WRITE,
         .on_write_ready   = request_write,
