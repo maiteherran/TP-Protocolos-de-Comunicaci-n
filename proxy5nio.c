@@ -12,8 +12,8 @@
 
 #include <arpa/inet.h>
 
-#include "buffer.h"
-#include "stm.h"
+#include "Utils/buffer.h"
+#include "Utils/stm.h"
 #include "proxy5nio.h"
 
 #define N(x) (sizeof(x)/sizeof((x)[0]))
