@@ -285,7 +285,7 @@
 #include <netinet/tcp.h>
 
 #include "Utils/selector.h"
-#include "Utils/socks5nio.h"
+#include "Utils/proxy5nio.h"
 
 static bool done = false;
 
@@ -359,12 +359,12 @@ main(const int argc, const char **argv) {
         err_msg = "unable to create selector";
         goto finally;
     }
-    const struct fd_handler socksv5 = {
-            .handle_read       = socksv5_passive_accept,
+    const struct fd_handler proxyv5 = {
+            .handle_read       = proxyv5_passive_accept,
             .handle_write      = NULL,
             .handle_close      = NULL, // nada que liberar
     };
-    ss = selector_register(selector, server, &socksv5,
+    ss = selector_register(selector, server, &proxyv5,
                            OP_READ, NULL);
     if (ss != SELECTOR_SUCCESS) {
         err_msg = "registering fd";
@@ -399,7 +399,7 @@ main(const int argc, const char **argv) {
     }
     selector_close();
 
-    socksv5_pool_destroy();
+    proxyv5_pool_destroy();
 
     if (server >= 0) {
         close(server);

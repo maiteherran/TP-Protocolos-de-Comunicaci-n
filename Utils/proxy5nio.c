@@ -1,5 +1,5 @@
 /**
- * socks5nio.c  - controla el flujo de un proxy SOCKSv5 (sockets no bloqueantes)
+ * proxy5nio.c  - controla el flujo de un proxy proxyv5 (sockets no bloqueantes)
  */
 #include<stdio.h>
 #include <stdlib.h>  // malloc
@@ -14,14 +14,14 @@
 
 #include "buffer.h"
 #include "stm.h"
-#include "socks5nio.h"
+#include "proxy5nio.h"
 
 #define N(x) (sizeof(x)/sizeof((x)[0]))
 #define BUFFER_SIZE 2048
 
 
 /** maquina de estados general */
-enum socks_v5state {
+enum proxy_v5state {
     REQUEST_READ,
 
     /**
@@ -126,7 +126,7 @@ struct connecting {
     buffer *wb;
     const int *client_fd;
     int *origin_fd;
-    enum socks_response_status *status;
+    enum proxy_response_status *status;
 };
 
 
@@ -138,7 +138,7 @@ struct connecting {
  * Se utiliza un contador de referencias (references) para saber cuando debemos
  * liberarlo finalmente, y un pool para reusar alocaciones previas.
  */
-struct socks5 {
+struct proxy5 {
     /** información del cliente */
     struct sockaddr_storage client_addr;
     socklen_t client_addr_len;
@@ -178,12 +178,12 @@ struct socks5 {
     unsigned references;
 
     /** siguiente en el pool */
-    struct socks5 *next;
+    struct proxy5 *next;
 };
 
 
 /**
- * Pool de `struct socks5', para ser reusados.
+ * Pool de `struct proxy5', para ser reusados.
  *
  * Como tenemos un unico hilo que emite eventos no necesitamos barreras de
  * contención.
@@ -191,15 +191,15 @@ struct socks5 {
 
 static const unsigned max_pool = 50; // tamaño máximo
 static unsigned pool_size = 0;  // tamaño actual
-static struct socks5 *pool = 0;  // pool propiamente dicho
+static struct proxy5 *pool = 0;  // pool propiamente dicho
 
 static const struct state_definition *
-socks5_describe_states(void);
+proxy5_describe_states(void);
 
-/** crea un nuevo `struct socks5' */
-static struct socks5 *
-socks5_new(int client_fd) {
-    struct socks5 *ret;
+/** crea un nuevo `struct proxy5' */
+static struct proxy5 *
+proxy5_new(int client_fd) {
+    struct proxy5 *ret;
 
     if (pool == NULL) {
         ret = malloc(sizeof(*ret));
@@ -219,7 +219,7 @@ socks5_new(int client_fd) {
 
     ret->stm.initial = REQUEST_READ;
     ret->stm.max_state = ERROR;
-    ret->stm.states = socks5_describe_states();
+    ret->stm.states = proxy5_describe_states();
     stm_init(&ret->stm);
 
     buffer_init(&ret->read_buffer, N(ret->raw_buff_a), ret->raw_buff_a);
@@ -232,7 +232,7 @@ socks5_new(int client_fd) {
 
 /** realmente destruye */
 static void
-socks5_destroy_(struct socks5 *s) {
+proxy5_destroy_(struct proxy5 *s) {
     if (s->origin_resolution != NULL) {
         freeaddrinfo(s->origin_resolution);
         s->origin_resolution = 0;
@@ -241,11 +241,11 @@ socks5_destroy_(struct socks5 *s) {
 }
 
 /**
- * destruye un  `struct socks5', tiene en cuenta las referencias
+ * destruye un  `struct proxy5', tiene en cuenta las referencias
  * y el pool de objetos.
  */
 static void
-socks5_destroy(struct socks5 *s) {
+proxy5_destroy(struct proxy5 *s) {
     if (s == NULL) {
         // nada para hacer
     } else if (s->references == 1) {
@@ -255,7 +255,7 @@ socks5_destroy(struct socks5 *s) {
                 pool = s;
                 pool_size++;
             } else {
-                socks5_destroy_(s);
+                proxy5_destroy_(s);
             }
         }
     } else {
@@ -264,41 +264,41 @@ socks5_destroy(struct socks5 *s) {
 }
 
 void
-socksv5_pool_destroy(void) {
-    struct socks5 *next, *s;
+proxyv5_pool_destroy(void) {
+    struct proxy5 *next, *s;
     for (s = pool; s != NULL; s = next) {
         next = s->next;
         free(s);
     }
 }
 
-/** obtiene el struct (socks5 *) desde la llave de selección  */
-#define ATTACHMENT(key) ( (struct socks5 *)(key)->data)
+/** obtiene el struct (proxy5 *) desde la llave de selección  */
+#define ATTACHMENT(key) ( (struct proxy5 *)(key)->data)
 
 /* declaración forward de los handlers de selección de una conexión
  * establecida entre un cliente y el proxy.
  */
-static void socksv5_read(struct selector_key *key);
+static void proxyv5_read(struct selector_key *key);
 
-static void socksv5_write(struct selector_key *key);
+static void proxyv5_write(struct selector_key *key);
 
-static void socksv5_block(struct selector_key *key);
+static void proxyv5_block(struct selector_key *key);
 
-static void socksv5_close(struct selector_key *key);
+static void proxyv5_close(struct selector_key *key);
 
-static const struct fd_handler socks5_handler = {
-        .handle_read   = socksv5_read,
-        .handle_write  = socksv5_write,
-        .handle_close  = socksv5_close,
-        .handle_block  = socksv5_block,
+static const struct fd_handler proxy5_handler = {
+        .handle_read   = proxyv5_read,
+        .handle_write  = proxyv5_write,
+        .handle_close  = proxyv5_close,
+        .handle_block  = proxyv5_block,
 };
 
 /** Intenta aceptar la nueva conexión entrante*/
 void
-socksv5_passive_accept(struct selector_key *key) {
+proxyv5_passive_accept(struct selector_key *key) {
     struct sockaddr_storage client_addr;
     socklen_t client_addr_len = sizeof(client_addr);
-    struct socks5 *state = NULL;
+    struct proxy5 *state = NULL;
 
     const int client = accept(key->fd, (struct sockaddr *) &client_addr, &client_addr_len);
     if (client == -1) {
@@ -309,7 +309,7 @@ socksv5_passive_accept(struct selector_key *key) {
         printf("setting client flags failed\n");
         goto fail;
     }
-    state = socks5_new(client);
+    state = proxy5_new(client);
 
     if (state == NULL) {
         printf("No hay estado\n");
@@ -321,7 +321,7 @@ socksv5_passive_accept(struct selector_key *key) {
     memcpy(&state->client_addr, &client_addr, client_addr_len);
     state->client_addr_len = client_addr_len;
 
-    if (SELECTOR_SUCCESS != selector_register(key->s, client, &socks5_handler, OP_READ, state)) {
+    if (SELECTOR_SUCCESS != selector_register(key->s, client, &proxy5_handler, OP_READ, state)) {
         printf("No se pudeo registrar el cliente en el selector\n");
         goto fail;
     }
@@ -331,7 +331,7 @@ socksv5_passive_accept(struct selector_key *key) {
     if (client != -1) {
         close(client);
     }
-    socks5_destroy(state);
+    proxy5_destroy(state);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -489,7 +489,7 @@ request_resolv_done(struct selector_key *key);
 static void *
 request_resolv_blocking(void *data) {
     struct selector_key *key = (struct selector_key *) data;
-    struct socks5 *s = ATTACHMENT(key);
+    struct proxy5 *s = ATTACHMENT(key);
     struct request_st *d = &ATTACHMENT(key)->client.request;
 
     printf("host: %s, port: %i\n", d->request.host, (int) d->request.port);
@@ -518,7 +518,7 @@ request_resolv_blocking(void *data) {
 static unsigned
 request_resolv_done(struct selector_key *key) {
     struct request_st *d = &ATTACHMENT(key)->client.request;
-    struct socks5 *s = ATTACHMENT(key);
+    struct proxy5 *s = ATTACHMENT(key);
 
     s->origin_domain = s->origin_resolution->ai_family;
     s->origin_addr_len = s->origin_resolution->ai_addrlen;
@@ -537,7 +537,7 @@ static unsigned
 request_connect(struct selector_key *key, struct request_st *d) {
     bool error = false;
     int *fd = d->origin_fd;
-    struct socks5 *s = ATTACHMENT(key);
+    struct proxy5 *s = ATTACHMENT(key);
 
     *fd = socket(s->origin_domain, s->origin_type, s->origin_protocol);
     if (*fd == -1) {
@@ -560,7 +560,7 @@ request_connect(struct selector_key *key, struct request_st *d) {
 
             // esperamos la conexion en el nuevo socket
             // polleamos el socket del origin server
-            st = selector_register(key->s, *fd, &socks5_handler,
+            st = selector_register(key->s, *fd, &proxy5_handler,
                                    OP_WRITE, key->data);
             if (SELECTOR_SUCCESS != st) {
                 error = true;
@@ -603,15 +603,17 @@ void do_http_request(struct t_request request, char *protocol, FILE *originWrite
 //    fputs("Connection: close\r\n", originWritefp);
     fflush(originWritefp);
 
-     for (int i = 0; i != request.num_headers; i++) { //TODO si encuentro algun header conection keep alive lo saco no?
+    for (int i = 0; i != request.num_headers; i++) { //TODO si encuentro algun header conection keep alive lo saco no?
         if (strncasecmp(request.headers[i].name, "Host", request.headers[i].name_len) != 0) {
-            fprintf(originWritefp, "%.*s: %.*s\r\n", (int)request.headers[i].name_len, request.headers[i].name, (int)request.headers[i].value_len, request.headers[i].value);
-            printf("%.*s: %.*s\r\n", (int)request.headers[i].name_len, request.headers[i].name, (int)request.headers[i].value_len, request.headers[i].value);
+            fprintf(originWritefp, "%.*s: %.*s\r\n", (int) request.headers[i].name_len, request.headers[i].name,
+                    (int) request.headers[i].value_len, request.headers[i].value);
+            printf("%.*s: %.*s\r\n", (int) request.headers[i].name_len, request.headers[i].name,
+                   (int) request.headers[i].value_len, request.headers[i].value);
             fflush(originWritefp);
         }
     }
 
-    if(request.body_len > 0) {
+    if (request.body_len > 0) {
         fputs("\r\n", originWritefp);
         printf("\r\n");
         fprintf(originWritefp, "%.*s\r\n", (int) request.body_len, request.body);
@@ -674,7 +676,8 @@ static unsigned do_http_response(FILE *clientWritefp, FILE *originReadfp, int *i
         fflush(clientWritefp);
         *is_header_close = 1;
     }
-    while ((line = fgetln(originReadfp, &length)) != (char *) 0 && length > 0) { //TODO si encuentro algun header conection keep alive lo saco no?
+    while ((line = fgetln(originReadfp, &length)) != (char *) 0 &&
+           length > 0) { //TODO si encuentro algun header conection keep alive lo saco no?
         fprintf(clientWritefp, "%.*s", (int) length, line);
         fflush(clientWritefp);
     }
@@ -723,7 +726,7 @@ static const struct state_definition client_statbl[] = {
 };
 
 static const struct state_definition *
-socks5_describe_states(void) {
+proxy5_describe_states(void) {
     return client_statbl;
 }
 
@@ -731,45 +734,45 @@ socks5_describe_states(void) {
 // Handlers top level de la conexión pasiva.
 // son los que emiten los eventos a la maquina de estados.
 static void
-socksv5_done(struct selector_key *key);
+proxyv5_done(struct selector_key *key);
 
 static void
-socksv5_read(struct selector_key *key) {
+proxyv5_read(struct selector_key *key) {
     struct state_machine *stm = &ATTACHMENT(key)->stm;
-    const enum socks_v5state st = stm_handler_read(stm, key);
+    const enum proxy_v5state st = stm_handler_read(stm, key);
 
     if (ERROR == st || DONE == st) {
-        socksv5_done(key);
+        proxyv5_done(key);
     }
 }
 
 static void
-socksv5_write(struct selector_key *key) {
+proxyv5_write(struct selector_key *key) {
     struct state_machine *stm = &ATTACHMENT(key)->stm;
-    const enum socks_v5state st = stm_handler_write(stm, key);
+    const enum proxy_v5state st = stm_handler_write(stm, key);
 
     if (ERROR == st || DONE == st) {
-        socksv5_done(key);
+        proxyv5_done(key);
     }
 }
 
 static void
-socksv5_block(struct selector_key *key) {
+proxyv5_block(struct selector_key *key) {
     struct state_machine *stm = &ATTACHMENT(key)->stm;
-    const enum socks_v5state st = stm_handler_block(stm, key);
+    const enum proxy_v5state st = stm_handler_block(stm, key);
 
     if (ERROR == st || DONE == st) {
-        socksv5_done(key);
+        proxyv5_done(key);
     }
 }
 
 static void
-socksv5_close(struct selector_key *key) {
-    socks5_destroy(ATTACHMENT(key));
+proxyv5_close(struct selector_key *key) {
+    proxy5_destroy(ATTACHMENT(key));
 }
 
 static void
-socksv5_done(struct selector_key *key) {
+proxyv5_done(struct selector_key *key) {
     const int fds[] = {
             ATTACHMENT(key)->client_fd,
             ATTACHMENT(key)->origin_fd,

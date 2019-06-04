@@ -27,6 +27,7 @@
 #include <assert.h>
 #include <stddef.h>
 #include <string.h>
+
 #ifdef __SSE4_2__
 #ifdef _MSC_VER
 #include <nmmintrin.h>
@@ -34,6 +35,7 @@
 #include <x86intrin.h>
 #endif
 #endif
+
 #include "picohttpparser.h"
 
 #if __GNUC__ >= 3
@@ -102,8 +104,8 @@ static const char *token_char_map = "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\
                                     "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
                                     "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
 
-static const char *findchar_fast(const char *buf, const char *buf_end, const char *ranges, size_t ranges_size, int *found)
-{
+static const char *
+findchar_fast(const char *buf, const char *buf_end, const char *ranges, size_t ranges_size, int *found) {
     *found = 0;
 #if __SSE4_2__
     if (likely(buf_end - buf >= 16)) {
@@ -124,15 +126,15 @@ static const char *findchar_fast(const char *buf, const char *buf_end, const cha
     }
 #else
     /* suppress unused parameter warning */
-    (void)buf_end;
-    (void)ranges;
-    (void)ranges_size;
+    (void) buf_end;
+    (void) ranges;
+    (void) ranges_size;
 #endif
     return buf;
 }
 
-static const char *get_token_to_eol(const char *buf, const char *buf_end, const char **token, size_t *token_len, int *ret)
-{
+static const char *
+get_token_to_eol(const char *buf, const char *buf_end, const char **token, size_t *token_len, int *ret) {
     const char *token_start = buf;
 
 #ifdef __SSE4_2__
@@ -162,8 +164,8 @@ static const char *get_token_to_eol(const char *buf, const char *buf_end, const 
         DOIT();
 #undef DOIT
         continue;
-    NonPrintable:
-        if ((likely((unsigned char)*buf < '\040') && likely(*buf != '\011')) || unlikely(*buf == '\177')) {
+        NonPrintable:
+        if ((likely((unsigned char) *buf < '\040') && likely(*buf != '\011')) || unlikely(*buf == '\177')) {
             goto FOUND_CTL;
         }
         ++buf;
@@ -172,12 +174,12 @@ static const char *get_token_to_eol(const char *buf, const char *buf_end, const 
     for (;; ++buf) {
         CHECK_EOF();
         if (unlikely(!IS_PRINTABLE_ASCII(*buf))) {
-            if ((likely((unsigned char)*buf < '\040') && likely(*buf != '\011')) || unlikely(*buf == '\177')) {
+            if ((likely((unsigned char) *buf < '\040') && likely(*buf != '\011')) || unlikely(*buf == '\177')) {
                 goto FOUND_CTL;
             }
         }
     }
-FOUND_CTL:
+    FOUND_CTL:
     if (likely(*buf == '\015')) {
         ++buf;
         EXPECT_CHAR('\012');
@@ -194,8 +196,7 @@ FOUND_CTL:
     return buf;
 }
 
-static const char *is_complete(const char *buf, const char *buf_end, size_t last_len, int *ret)
-{
+static const char *is_complete(const char *buf, const char *buf_end, size_t last_len, int *ret) {
     int ret_cnt = 0;
     buf = last_len < 3 ? buf : buf + last_len - 3;
 
@@ -242,8 +243,7 @@ static const char *is_complete(const char *buf, const char *buf_end, size_t last
     } while (0)
 
 /* returned pointer is always within [buf, buf_end), or null */
-static const char *parse_http_version(const char *buf, const char *buf_end, int *minor_version, int *ret)
-{
+static const char *parse_http_version(const char *buf, const char *buf_end, int *minor_version, int *ret) {
     /* we want at least [HTTP/1.<two chars>] to try to parse */
     if (buf_end - buf < 9) {
         *ret = -2;
@@ -261,8 +261,7 @@ static const char *parse_http_version(const char *buf, const char *buf_end, int 
 }
 
 static const char *parse_headers(const char *buf, const char *buf_end, struct phr_header *headers, size_t *num_headers,
-                                 size_t max_headers, int *ret)
-{
+                                 size_t max_headers, int *ret) {
     for (;; ++*num_headers) {
         CHECK_EOF();
         if (*buf == '\015') {
@@ -297,7 +296,7 @@ static const char *parse_headers(const char *buf, const char *buf_end, struct ph
             while (1) {
                 if (*buf == ':') {
                     break;
-                } else if (!token_char_map[(unsigned char)*buf]) {
+                } else if (!token_char_map[(unsigned char) *buf]) {
                     *ret = -1;
                     return NULL;
                 }
@@ -338,10 +337,10 @@ static const char *parse_headers(const char *buf, const char *buf_end, struct ph
     return buf;
 }
 
-static const char *parse_request(const char *buf, const char *buf_end, const char **method, size_t *method_len, const char **path,
-                                 size_t *path_len, int *minor_version, struct phr_header *headers, size_t *num_headers,
-                                 size_t max_headers, int *ret)
-{
+static const char *
+parse_request(const char *buf, const char *buf_end, const char **method, size_t *method_len, const char **path,
+              size_t *path_len, int *minor_version, struct phr_header *headers, size_t *num_headers,
+              size_t max_headers, int *ret) {
     /* skip first empty line (some clients add CRLF after POST content) */
     CHECK_EOF();
     if (*buf == '\015') {
@@ -381,8 +380,8 @@ static const char *parse_request(const char *buf, const char *buf_end, const cha
 }
 
 int phr_parse_request(const char *buf_start, size_t len, const char **method, size_t *method_len, const char **path,
-                      size_t *path_len, int *minor_version, struct phr_header *headers, size_t *num_headers, size_t last_len)
-{
+                      size_t *path_len, int *minor_version, struct phr_header *headers, size_t *num_headers,
+                      size_t last_len) {
     const char *buf = buf_start, *buf_end = buf_start + len;
     size_t max_headers = *num_headers;
     int r;
@@ -400,17 +399,18 @@ int phr_parse_request(const char *buf_start, size_t len, const char **method, si
         return r;
     }
 
-    if ((buf = parse_request(buf, buf_end, method, method_len, path, path_len, minor_version, headers, num_headers, max_headers,
+    if ((buf = parse_request(buf, buf_end, method, method_len, path, path_len, minor_version, headers, num_headers,
+                             max_headers,
                              &r)) == NULL) {
         return r;
     }
 
-    return (int)(buf - buf_start);
+    return (int) (buf - buf_start);
 }
 
-static const char *parse_response(const char *buf, const char *buf_end, int *minor_version, int *status, const char **msg,
-                                  size_t *msg_len, struct phr_header *headers, size_t *num_headers, size_t max_headers, int *ret)
-{
+static const char *
+parse_response(const char *buf, const char *buf_end, int *minor_version, int *status, const char **msg,
+               size_t *msg_len, struct phr_header *headers, size_t *num_headers, size_t max_headers, int *ret) {
     /* parse "HTTP/1.x" */
     if ((buf = parse_http_version(buf, buf_end, minor_version, ret)) == NULL) {
         return NULL;
@@ -451,9 +451,9 @@ static const char *parse_response(const char *buf, const char *buf_end, int *min
     return parse_headers(buf, buf_end, headers, num_headers, max_headers, ret);
 }
 
-int phr_parse_response(const char *buf_start, size_t len, int *minor_version, int *status, const char **msg, size_t *msg_len,
-                       struct phr_header *headers, size_t *num_headers, size_t last_len)
-{
+int phr_parse_response(const char *buf_start, size_t len, int *minor_version, int *status, const char **msg,
+                       size_t *msg_len,
+                       struct phr_header *headers, size_t *num_headers, size_t last_len) {
     const char *buf = buf_start, *buf_end = buf + len;
     size_t max_headers = *num_headers;
     int r;
@@ -470,15 +470,16 @@ int phr_parse_response(const char *buf_start, size_t len, int *minor_version, in
         return r;
     }
 
-    if ((buf = parse_response(buf, buf_end, minor_version, status, msg, msg_len, headers, num_headers, max_headers, &r)) == NULL) {
+    if ((buf = parse_response(buf, buf_end, minor_version, status, msg, msg_len, headers, num_headers, max_headers,
+                              &r)) == NULL) {
         return r;
     }
 
-    return (int)(buf - buf_start);
+    return (int) (buf - buf_start);
 }
 
-int phr_parse_headers(const char *buf_start, size_t len, struct phr_header *headers, size_t *num_headers, size_t last_len)
-{
+int
+phr_parse_headers(const char *buf_start, size_t len, struct phr_header *headers, size_t *num_headers, size_t last_len) {
     const char *buf = buf_start, *buf_end = buf + len;
     size_t max_headers = *num_headers;
     int r;
@@ -495,7 +496,7 @@ int phr_parse_headers(const char *buf_start, size_t len, struct phr_header *head
         return r;
     }
 
-    return (int)(buf - buf_start);
+    return (int) (buf - buf_start);
 }
 
 enum {
@@ -507,8 +508,7 @@ enum {
     CHUNKED_IN_TRAILERS_LINE_MIDDLE
 };
 
-static int decode_hex(int ch)
-{
+static int decode_hex(int ch) {
     if ('0' <= ch && ch <= '9') {
         return ch - '0';
     } else if ('A' <= ch && ch <= 'F') {
@@ -520,123 +520,121 @@ static int decode_hex(int ch)
     }
 }
 
-ssize_t phr_decode_chunked(struct phr_chunked_decoder *decoder, char *buf, size_t *_bufsz)
-{
+ssize_t phr_decode_chunked(struct phr_chunked_decoder *decoder, char *buf, size_t *_bufsz) {
     size_t dst = 0, src = 0, bufsz = *_bufsz;
     ssize_t ret = -2; /* incomplete */
 
     while (1) {
         switch (decoder->_state) {
-        case CHUNKED_IN_CHUNK_SIZE:
-            for (;; ++src) {
-                int v;
-                if (src == bufsz)
-                    goto Exit;
-                if ((v = decode_hex(buf[src])) == -1) {
-                    if (decoder->_hex_count == 0) {
+            case CHUNKED_IN_CHUNK_SIZE:
+                for (;; ++src) {
+                    int v;
+                    if (src == bufsz)
+                        goto Exit;
+                    if ((v = decode_hex(buf[src])) == -1) {
+                        if (decoder->_hex_count == 0) {
+                            ret = -1;
+                            goto Exit;
+                        }
+                        break;
+                    }
+                    if (decoder->_hex_count == sizeof(size_t) * 2) {
                         ret = -1;
                         goto Exit;
                     }
-                    break;
+                    decoder->bytes_left_in_chunk = decoder->bytes_left_in_chunk * 16 + v;
+                    ++decoder->_hex_count;
                 }
-                if (decoder->_hex_count == sizeof(size_t) * 2) {
+                decoder->_hex_count = 0;
+                decoder->_state = CHUNKED_IN_CHUNK_EXT;
+                /* fallthru */
+            case CHUNKED_IN_CHUNK_EXT:
+                /* RFC 7230 A.2 "Line folding in chunk extensions is disallowed" */
+                for (;; ++src) {
+                    if (src == bufsz)
+                        goto Exit;
+                    if (buf[src] == '\012')
+                        break;
+                }
+                ++src;
+                if (decoder->bytes_left_in_chunk == 0) {
+                    if (decoder->consume_trailer) {
+                        decoder->_state = CHUNKED_IN_TRAILERS_LINE_HEAD;
+                        break;
+                    } else {
+                        goto Complete;
+                    }
+                }
+                decoder->_state = CHUNKED_IN_CHUNK_DATA;
+                /* fallthru */
+            case CHUNKED_IN_CHUNK_DATA: {
+                size_t avail = bufsz - src;
+                if (avail < decoder->bytes_left_in_chunk) {
+                    if (dst != src)
+                        memmove(buf + dst, buf + src, avail);
+                    src += avail;
+                    dst += avail;
+                    decoder->bytes_left_in_chunk -= avail;
+                    goto Exit;
+                }
+                if (dst != src)
+                    memmove(buf + dst, buf + src, decoder->bytes_left_in_chunk);
+                src += decoder->bytes_left_in_chunk;
+                dst += decoder->bytes_left_in_chunk;
+                decoder->bytes_left_in_chunk = 0;
+                decoder->_state = CHUNKED_IN_CHUNK_CRLF;
+            }
+                /* fallthru */
+            case CHUNKED_IN_CHUNK_CRLF:
+                for (;; ++src) {
+                    if (src == bufsz)
+                        goto Exit;
+                    if (buf[src] != '\015')
+                        break;
+                }
+                if (buf[src] != '\012') {
                     ret = -1;
                     goto Exit;
                 }
-                decoder->bytes_left_in_chunk = decoder->bytes_left_in_chunk * 16 + v;
-                ++decoder->_hex_count;
-            }
-            decoder->_hex_count = 0;
-            decoder->_state = CHUNKED_IN_CHUNK_EXT;
-        /* fallthru */
-        case CHUNKED_IN_CHUNK_EXT:
-            /* RFC 7230 A.2 "Line folding in chunk extensions is disallowed" */
-            for (;; ++src) {
-                if (src == bufsz)
-                    goto Exit;
-                if (buf[src] == '\012')
-                    break;
-            }
-            ++src;
-            if (decoder->bytes_left_in_chunk == 0) {
-                if (decoder->consume_trailer) {
-                    decoder->_state = CHUNKED_IN_TRAILERS_LINE_HEAD;
-                    break;
-                } else {
-                    goto Complete;
+                ++src;
+                decoder->_state = CHUNKED_IN_CHUNK_SIZE;
+                break;
+            case CHUNKED_IN_TRAILERS_LINE_HEAD:
+                for (;; ++src) {
+                    if (src == bufsz)
+                        goto Exit;
+                    if (buf[src] != '\015')
+                        break;
                 }
-            }
-            decoder->_state = CHUNKED_IN_CHUNK_DATA;
-        /* fallthru */
-        case CHUNKED_IN_CHUNK_DATA: {
-            size_t avail = bufsz - src;
-            if (avail < decoder->bytes_left_in_chunk) {
-                if (dst != src)
-                    memmove(buf + dst, buf + src, avail);
-                src += avail;
-                dst += avail;
-                decoder->bytes_left_in_chunk -= avail;
-                goto Exit;
-            }
-            if (dst != src)
-                memmove(buf + dst, buf + src, decoder->bytes_left_in_chunk);
-            src += decoder->bytes_left_in_chunk;
-            dst += decoder->bytes_left_in_chunk;
-            decoder->bytes_left_in_chunk = 0;
-            decoder->_state = CHUNKED_IN_CHUNK_CRLF;
-        }
-        /* fallthru */
-        case CHUNKED_IN_CHUNK_CRLF:
-            for (;; ++src) {
-                if (src == bufsz)
-                    goto Exit;
-                if (buf[src] != '\015')
-                    break;
-            }
-            if (buf[src] != '\012') {
-                ret = -1;
-                goto Exit;
-            }
-            ++src;
-            decoder->_state = CHUNKED_IN_CHUNK_SIZE;
-            break;
-        case CHUNKED_IN_TRAILERS_LINE_HEAD:
-            for (;; ++src) {
-                if (src == bufsz)
-                    goto Exit;
-                if (buf[src] != '\015')
-                    break;
-            }
-            if (buf[src++] == '\012')
-                goto Complete;
-            decoder->_state = CHUNKED_IN_TRAILERS_LINE_MIDDLE;
-        /* fallthru */
-        case CHUNKED_IN_TRAILERS_LINE_MIDDLE:
-            for (;; ++src) {
-                if (src == bufsz)
-                    goto Exit;
-                if (buf[src] == '\012')
-                    break;
-            }
-            ++src;
-            decoder->_state = CHUNKED_IN_TRAILERS_LINE_HEAD;
-            break;
-        default:
-            assert(!"decoder is corrupt");
+                if (buf[src++] == '\012')
+                    goto Complete;
+                decoder->_state = CHUNKED_IN_TRAILERS_LINE_MIDDLE;
+                /* fallthru */
+            case CHUNKED_IN_TRAILERS_LINE_MIDDLE:
+                for (;; ++src) {
+                    if (src == bufsz)
+                        goto Exit;
+                    if (buf[src] == '\012')
+                        break;
+                }
+                ++src;
+                decoder->_state = CHUNKED_IN_TRAILERS_LINE_HEAD;
+                break;
+            default:
+                assert(!"decoder is corrupt");
         }
     }
 
-Complete:
+    Complete:
     ret = bufsz - src;
-Exit:
+    Exit:
     if (dst != src)
         memmove(buf + dst, buf + src, bufsz - src);
     *_bufsz = dst;
     return ret;
 }
 
-int phr_decode_chunked_is_in_data(struct phr_chunked_decoder *decoder)
-{
+int phr_decode_chunked_is_in_data(struct phr_chunked_decoder *decoder) {
     return decoder->_state == CHUNKED_IN_CHUNK_DATA;
 }
 

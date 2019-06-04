@@ -8,4 +8,4 @@ add_executable(ProbandoTpProtos main.c main.h Parser/picohttpparser.c Parser/pic
         Utils/buffer.c Utils/buffer.h
         Utils/selector.c Utils/selector.h
         Utils/stm.c Utils/stm.h
-        Utils/socks5nio.c Utils/socks5nio.h)
+        Utils/proxy5nio.c Utils/proxy5nio.h)
