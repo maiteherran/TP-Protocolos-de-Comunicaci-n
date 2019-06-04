@@ -291,7 +291,7 @@ static bool done = false;
 
 static void
 sigterm_handler(const int signal) {
-    printf("signal %d, cleaning up and exiting\n",signal);
+    printf("signal %d, cleaning up and exiting\n", signal);
     done = true;
 }
 
@@ -302,18 +302,18 @@ main(const int argc, const char **argv) {
     // no tenemos nada que leer de stdin
     close(0);
 
-    const char       *err_msg = NULL;
-    selector_status   ss      = SELECTOR_SUCCESS;
-    fd_selector selector      = NULL;
+    const char *err_msg = NULL;
+    selector_status ss = SELECTOR_SUCCESS;
+    fd_selector selector = NULL;
 
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
-    addr.sin_family      = AF_INET;
+    addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    addr.sin_port        = htons(port);
+    addr.sin_port = htons(port);
 
     const int server = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if(server < 0) {
+    if (server < 0) {
         err_msg = "unable to create socket";
         goto finally;
     }
@@ -321,9 +321,9 @@ main(const int argc, const char **argv) {
     fprintf(stdout, "Listening on TCP port %d\n", port);
 
     // man 7 ip. no importa reportar nada si falla.
-    setsockopt(server, SOL_SOCKET, SO_REUSEADDR, &(int){ 1 }, sizeof(int));
+    setsockopt(server, SOL_SOCKET, SO_REUSEADDR, &(int) {1}, sizeof(int));
 
-    if(bind(server, (struct sockaddr*) &addr, sizeof(addr)) < 0) {
+    if (bind(server, (struct sockaddr *) &addr, sizeof(addr)) < 0) {
         err_msg = "unable to bind socket";
         goto finally;
     }
@@ -336,9 +336,9 @@ main(const int argc, const char **argv) {
     // registrar sigterm es útil para terminar el programa normalmente.
     // esto ayuda mucho en herramientas como valgrind.
     signal(SIGTERM, sigterm_handler);
-    signal(SIGINT,  sigterm_handler);
+    signal(SIGINT, sigterm_handler);
 
-    if(selector_fd_set_nio(server) == -1) {
+    if (selector_fd_set_nio(server) == -1) {
         err_msg = "getting server socket flags";
         goto finally;
     }
@@ -349,13 +349,13 @@ main(const int argc, const char **argv) {
                     .tv_nsec = 0,
             },
     };
-    if(0 != selector_init(&conf)) {
+    if (0 != selector_init(&conf)) {
         err_msg = "initializing selector";
         goto finally;
     }
 
     selector = selector_new(1024);
-    if(selector == NULL) {
+    if (selector == NULL) {
         err_msg = "unable to create selector";
         goto finally;
     }
@@ -366,42 +366,42 @@ main(const int argc, const char **argv) {
     };
     ss = selector_register(selector, server, &socksv5,
                            OP_READ, NULL);
-    if(ss != SELECTOR_SUCCESS) {
+    if (ss != SELECTOR_SUCCESS) {
         err_msg = "registering fd";
         goto finally;
     }
-    for(;!done;) {
+    for (; !done;) {
         err_msg = NULL;
         ss = selector_select(selector);
-        if(ss != SELECTOR_SUCCESS) {
+        if (ss != SELECTOR_SUCCESS) {
             err_msg = "serving";
             goto finally;
         }
     }
-    if(err_msg == NULL) {
+    if (err_msg == NULL) {
         err_msg = "closing";
     }
 
     int ret = 0;
     finally:
-    if(ss != SELECTOR_SUCCESS) {
-        fprintf(stderr, "%s: %s\n", (err_msg == NULL) ? "": err_msg,
+    if (ss != SELECTOR_SUCCESS) {
+        fprintf(stderr, "%s: %s\n", (err_msg == NULL) ? "" : err_msg,
                 ss == SELECTOR_IO
                 ? strerror(errno)
                 : selector_error(ss));
         ret = 2;
-    } else if(err_msg) {
+    } else if (err_msg) {
         perror(err_msg);
         ret = 1;
     }
-    if(selector != NULL) {
+    if (selector != NULL) {
         selector_destroy(selector);
     }
     selector_close();
 
     socksv5_pool_destroy();
 
-    if(server >= 0) {
+    if (server >= 0) {
         close(server);
     }
     return ret;
