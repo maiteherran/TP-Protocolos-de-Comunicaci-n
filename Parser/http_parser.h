@@ -7,13 +7,13 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-
 #include <netinet/in.h>
-
 #include "../Utils/buffer.h"
 
+#define  BUFFER_SIZE 1024
+
 struct request {
-    char host[1024];
+    char host[BUFFER_SIZE];
     int  port;
 };
 
@@ -35,12 +35,12 @@ enum request_state {
 struct request_parser {
     struct request     *request;
     enum request_state state;
-    char url[1024];
-    char header[1024];
+    char               url[BUFFER_SIZE];
+    char               header[BUFFER_SIZE];
     /** cuantos bytes tenemos que leer*/
-    int            n;
+    int                n;
     /** cuantos bytes ya leimos */
-    int            i;
+    int                i;
 };
 
 

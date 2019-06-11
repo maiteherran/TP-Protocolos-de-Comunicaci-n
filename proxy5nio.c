@@ -1,6 +1,3 @@
-/**
- * proxy5nio.c  - controla el flujo de un proxy proxyv5 (sockets no bloqueantes)
- */
 #include<stdio.h>
 #include <stdlib.h>  // malloc
 #include <string.h>  // memset
@@ -9,74 +6,103 @@
 #include <time.h>
 #include <unistd.h>  // close
 #include <pthread.h>
+#include <sys/types.h>
+#include <sys/socket.h>
 
 #include <arpa/inet.h>
+#include <sys/ioctl.h>
 
 #include "Utils/buffer.h"
 #include "Utils/stm.h"
+#include "Parser/http_chunk_decoder.h"
 #include "proxy5nio.h"
+#include "proxy_reporter.h"
+#include "Utils/log.h"
 
 #define N(x) (sizeof(x)/sizeof((x)[0]))
 #define BUFFER_SIZE 2048
-
+//lista:
+//cerrar bien en request y response
+//logear
+//metricas
+// escuchar las 2 bocas y poner un timer en el selector de 90s si nadie me mando nada cierro
+// cat | gzip -d | cat
 
 /** maquina de estados general */
 enum proxy_v5state {
-    REQUEST_READ,
-
-    /**
-     * Espera la resolución DNS
+    /*
+     * Recibe el request http del cliente, lo parsea hasta encontrar el host a donde debe conectarse
      *
-     * Intereses:
-     *     - OP_NOOP sobre client_fd. Espera un evento de que la tarea bloqueante
-     *               terminó.
      * Transiciones:
-     *     - REQUEST_CONNECTING si se logra resolución al nombre y se puede
-     *                          iniciar la conexión al origin server.
-     *     - REQUEST_WRITE      en otro caso
+     * REQUESTA_RESOLV si encuentra el host
+     * ERROR si no encuentra el host o algun caso de error
+     *
+     */
+            REQUEST_READ,
+    /*
+     * Resolucion DNS del host
+     *
+     * Transiciones:
+     * CONNECTING conexion propiamente dicha con el origin server
+     * ERROR caso que no se haya podido realizar la resolucion dns o no se pueda conectar al host
+     *
      */
             REQUEST_RESOLV,
-
-    /**
-     * Espera que se establezca la conexión al origin server
-     *
-     * Intereses:
-     *    - OP_WRITE sobre client_fd
+    /*
+     * Conexion propiamente dicha con el origin server
      *
      * Transiciones:
-     *    - REQUEST_WRITE    se haya logrado o no establecer la conexión.
-     *
+     * REQUEST_WRITE para enviar el request http del cliente al origin server
+     * REQUEST_RESOLV si no nos pudimos conectar volvemos al estado REQUEST_RESOLV buscando pidiendo otra resolucion dns
      */
-//    REQUEST_CONNECTING,
-
-    /**
-     * envía la respuesta del `request' al cliente.
-     *
-     * Intereses:
-     *   - OP_WRITE sobre client_fd
-     *   - OP_NOOP  sobre origin_fd
+            CONNECTING,
+    /*
+     * Envia el request parcial de cliente al origin server (el leido en REQUEST_READ),
+     * si queda mas contenido por leer del request lo lee y procede a enviarselo al origin server
      *
      * Transiciones:
-     *   - HELLO_WRITE  mientras queden bytes por enviar
-     *   - COPY         si el request fue exitoso y tenemos que copiar el
-     *                  contenido de los descriptores
-     *   - ERROR        ante I/O error
+     * RESPONSE espera la respuesta del origin server
+     * ERROR caso de error en la comunicacion entre partes
      */
             REQUEST_WRITE,
-    /**
-     * Copia bytes entre client_fd y origin_fd.
+    /*
+     * Recive al respuesta http del origin server censurando headers si es necesario, agrega Connection: close y se la envia al cliente
      *
-     * Intereses: (tanto para client_fd y origin_fd)
-     *   - OP_READ  si hay espacio para escribir en el buffer de lectura
-     *   - OP_WRITE si hay bytes para leer en el buffer de escritura
+     * Transiciones:
+     * TRANSFORM si estan activadas las transformaciones
+     * COPY_BODY flujo normal
      *
-     * Transicion:
-     *   - DONE     cuando no queda nada mas por copiar.
      */
-            RESPONSE_READ,
-
-    // estados terminales
+            RESPONSE,
+    /*
+     * Realiza la transforacion del body
+     *
+     * Transiciones:
+     * DONE transformacion comletada y recivida por el cliente
+     * ERROR caso que no se pudo realizar la transformacion o error en la comunicacion entre partes
+     */
+            TRANSFORM,
+    /*
+     * Como no hay nada que modificar en el body de la respuesta, se lo enviamos directo al cliente
+     *
+     * Transiciones:
+     * DONE transformacion comletada y recivida por el cliente
+     * ERROR caso que no se pudo realizar la transformacion o error en la comunicacion entre partes
+     */
+            COPY_BODY,
+    /*
+     * Proxy realizado, procedemos a cerrar las conneciones y liberar recursos
+     *
+     * Transiciones:
+     * ninguna
+     */
             DONE,
+    /*
+     * Si se presenta algun error terminamos en este estado, se cierran las conexiones y se liberan recursos
+     *
+     * Transiciones:
+     * ninguna
+     */
             ERROR,
 };
 
@@ -85,45 +111,59 @@ enum proxy_v5state {
 
 /** usado por REQUEST_READ, REQUEST_WRITE, REQUEST_RESOLV */
 
-struct t_request {
-    char              *method, *path, *host, *body;
-    int               version, body_len;
-    struct phr_header *headers;
-    size_t            num_headers;
-    size_t            bad_request;
-    size_t            port;
-};
+//struct t_request {
+//    char              *method, *path, *host, *body;
+//    int               version, body_len;
+//    struct phr_header *headers;
+//    size_t            num_headers;
+//    size_t            bad_request;
+//    size_t            port;
+//};
 
 struct request_st {
     /** buffer utilizado para I/O */
     buffer *rb, *wb;
 
-    struct t_request request;
+    struct request        request;
+    struct request_parser parser;
 
     // ¿a donde nos tenemos que conectar?
     struct sockaddr_storage *origin_addr;
     socklen_t               *origin_addr_len;
     int                     *origin_domain;
 
+    int request_done;
+
     const int *client_fd;
     int       *origin_fd;
+};
+
+enum response_state {
+    RESPONSE_STATUS,
+    RESPONSE_HEADERS,
+    RESPONSE_BODY,
 };
 
 struct response_st {
-    int       is_header_close;
-    const int *client_fd;
-    int       *origin_fd;
+    enum response_state state;
+    int                 is_header_close;
+    int                 headers_send;
+    int                 read_first_line;
+    int                 response_done;
+    const int           *client_fd;
+    int                 *origin_fd;
 };
 
-
-/** usado por REQUEST_CONNECTING */
-struct connecting {
-    buffer                     *wb;
+struct transform_st {
+    buffer                     *t_wb, *t_rb;
+    struct phr_chunked_decoder decoder;
+    int                        t_writefd;
+    int                        t_readfd;
+    int                        transform_done;
+    pid_t                      slavePid;
     const int                  *client_fd;
     int                        *origin_fd;
-    enum proxy_response_status *status;
 };
-
 
 /*
  * Si bien cada estado tiene su propio struct que le da un alcance
@@ -161,9 +201,12 @@ struct proxy5 {
     }                    client;
     /** estados para el origin_fd */
     union {
-        struct response_st response;
-        struct connecting  conn;
+        struct transform_st transform;
+        struct response_st  response;
     }                    orig;
+
+    int transformation_on; // TODO: por ahora esta aca en una varible y me fijo en response si entro o no
+    int chunked_set;
 
     /** buffers para ser usados read_buffer, write_buffer.*/
     uint8_t raw_buff_a[BUFFER_SIZE], raw_buff_b[BUFFER_SIZE];
@@ -219,6 +262,10 @@ proxy5_new(int client_fd) {
 
     buffer_init(&ret->read_buffer, N(ret->raw_buff_a), ret->raw_buff_a);
     buffer_init(&ret->write_buffer, N(ret->raw_buff_b), ret->raw_buff_b);
+    buffer_compact(&ret->read_buffer, 0);
+
+    ret->transformation_on = 0;
+    ret->chunked_set       = 0;
 
     ret->references = 1;
     finally:
@@ -320,7 +367,7 @@ proxyv5_passive_accept(struct selector_key *key) {
         printf("No se pudeo registrar el cliente en el selector\n");
         goto fail;
     }
-    printf("Cliente conectado y registrado\n");
+    log_debug("Cliente conectado y registrado\n");
     return;
     fail:
     if (client != -1) {
@@ -340,14 +387,16 @@ static void
 request_init(const unsigned state, struct selector_key *key) {
     struct request_st *d = &ATTACHMENT(key)->client.request;
 
-    d->rb        = &(ATTACHMENT(key)->read_buffer);
-    d->wb        = &(ATTACHMENT(key)->write_buffer);
-    d->client_fd = &ATTACHMENT(key)->client_fd;
-    d->origin_fd = &ATTACHMENT(key)->origin_fd;
-
+    d->rb             = &(ATTACHMENT(key)->read_buffer);
+    d->wb             = &(ATTACHMENT(key)->write_buffer);
+    d->client_fd      = &ATTACHMENT(key)->client_fd;
+    d->origin_fd      = &ATTACHMENT(key)->origin_fd;
+    d->parser.request = &d->request;
+    request_parser_init(&d->parser);
     d->origin_addr     = &ATTACHMENT(key)->origin_addr;
     d->origin_addr_len = &ATTACHMENT(key)->origin_addr_len;
     d->origin_domain   = &ATTACHMENT(key)->origin_domain;
+    d->request_done    = 0;
 }
 
 static unsigned
@@ -364,20 +413,25 @@ request_read(struct selector_key *key) {
     uint8_t  *ptr;
     size_t   count;
     ssize_t  n;
+    int      st;
+
+    if (!buffer_can_write(b)) {
+        report(*d->client_fd, REPORT_400);
+        return ERROR;
+    }
 
     ptr = buffer_write_ptr(b, &count);
     n   = recv(key->fd, ptr, count, 0);
     if (n > 0) {
         buffer_write_adv(b, n);
-        int  total;
-        char *buffer = buffer_read_ptr(b, &total);
-        buffer       = buffer + (total - 4);
-        if (strcmp(buffer, "\r\n\r\n") == 0) {
-            return request_process(key, d);
+        st = request_consume(b, &d->parser, &error);
+        if (request_is_done(st, &error)) {
+            ret = request_process(key, d);
         }
-    } else if (n == 0) {  // se leyo EOF
-        return request_process(key, d);
+    } else if (n == 0) { //esto esta al pedo, o se llena el buffer o encontramos host y pasamos a conectarnos
+        d->request_done = 1;
     } else {
+        // no hay que reportar error aca, el file descriptor esta roto
         ret = ERROR;
     }
     return ret;
@@ -385,91 +439,14 @@ request_read(struct selector_key *key) {
 
 static unsigned
 request_process(struct selector_key *key, struct request_st *d) {
-    size_t to_read;
-    char   *buffer                = (char *) buffer_read_ptr(d->rb, &to_read);
-    printf("%s", buffer);
-
-    char const        *method, *path;
-    int               pret, minor_version;
-    struct phr_header *headers    = (struct phr_header *) calloc(50, sizeof(struct phr_header));
-    size_t            method_len, path_len;
-    size_t            num_headers = 50; //sizeof(headers) / sizeof(headers[0]);
-    pret = //phr_parse_headers(buffer, strlen(buffer)+1, headers, &num_headers,0);
-            phr_parse_request(buffer, to_read, &method, &method_len, &path, &path_len, &minor_version, headers,
-                              &num_headers, 0);
-    if (pret < 0) {
-        printf("error, %i\n", pret);
-        d->request.bad_request = 1;
-        return ERROR;
-    }
-
-    d->request.body     = buffer + pret;
-    d->request.body_len = (to_read - pret);
-    d->request.host     = malloc(BUFFER_SIZE);
-    d->request.headers  = headers;
-    d->request.method   = malloc(method_len);
-    strncpy(d->request.method, method, method_len);
-    d->request.path = malloc(path_len);
-    strncpy(d->request.path, path, path_len);
-    d->request.version        = minor_version;
-    d->request.num_headers    = num_headers;
-    d->request.bad_request    = 0;
-
-    printf("el body: \n");
-    printf("%.*s\n", d->request.body_len, d->request.body);
-
-    int                 iport;
-    unsigned short      cport = 80;
-    char                hostaux[BUFFER_SIZE], pathaux[BUFFER_SIZE];
-    if (strncasecmp(d->request.path, "http://", 7) == 0) {
-        strncpy(d->request.path, "http", 4);
-        if (sscanf(d->request.path, "http://%[^:/]:%d%s", hostaux, &iport, pathaux) == 3)
-            cport       = (unsigned short) iport;
-        else if (sscanf(d->request.path, "http://%[^/]%s", hostaux, pathaux) == 2) {
-        } else if (sscanf(d->request.path, "http://%[^:/]:%d", hostaux, &iport) == 2) {
-            cport = (unsigned short) iport;
-            *pathaux       = '/';
-            *(pathaux + 1) = '\0';
-        } else if (sscanf(d->request.path, "http://%[^/]", hostaux) == 1) {
-            cport = 80;
-            *pathaux       = '/';
-            *(pathaux + 1) = '\0';
-        } else {
-            d->request.bad_request = 1;
-            printf("Bad request\n");
-            return ERROR;
-        }
-        d->request.port = 80;//cport;
-        strcpy(d->request.path, pathaux);
-        strcpy(d->request.host, hostaux);
-    } else {
-        int      found = 0;
-        for (int i     = 0; i != d->request.num_headers; ++i) {
-            if (strncasecmp(d->request.headers[i].name, "Host", d->request.headers[i].name_len) == 0) {
-                stpncpy(d->request.host, d->request.headers[i].value, d->request.headers[i].value_len);
-                char *hostName = strtok(d->request.host, ":");
-                char *port     = strtok(NULL, ":");
-                if (port) {
-                    d->request.port = (size_t) atoi(port);
-                } else {
-                    d->request.port = 80;
-                }
-                found = 1;
-            }
-        }
-        if (!found) {
-            d->request.bad_request = 1;
-            return ERROR;
-        }
-    }
+    printf("%s", d->rb->read);
     pthread_t           tid;
-    struct selector_key *k    = malloc(sizeof(*key));
+    struct selector_key *k = malloc(sizeof(*key));
     memcpy(k, key, sizeof(*k));
     pthread_create(&tid, 0, request_resolv_blocking, k);
     selector_set_interest_key(key, OP_NOOP);
     return REQUEST_RESOLV;
 }
-
 
 ////////////////////////////////////////////////////////////////////////////////
 // RESOLVE
@@ -486,7 +463,7 @@ request_resolv_blocking(void *data) {
     struct proxy5       *s   = ATTACHMENT(key);
     struct request_st   *d   = &ATTACHMENT(key)->client.request;
 
-    printf("host: %s, port: %i\n", d->request.host, (int) d->request.port);
+    log_debug("host: %s, port: %i\n", d->request.host, (int) d->request.port);
 
     pthread_detach(pthread_self());
     s->origin_resolution = 0;
@@ -514,17 +491,25 @@ request_resolv_done(struct selector_key *key) {
     struct request_st *d = &ATTACHMENT(key)->client.request;
     struct proxy5     *s = ATTACHMENT(key);
 
-    s->origin_domain   = s->origin_resolution->ai_family;
-    s->origin_addr_len = s->origin_resolution->ai_addrlen;
-    s->origin_type     = s->origin_resolution->ai_socktype;
-    s->origin_protocol = s->origin_resolution->ai_protocol;
-    memcpy(&s->origin_addr,
-           s->origin_resolution->ai_addr,
-           s->origin_resolution->ai_addrlen);
+    unsigned int ret = ERROR;
+
+    for (struct addrinfo *current = s->origin_resolution; current != NULL; current = current->ai_next) {
+        s->origin_domain   = current->ai_family;
+        s->origin_addr_len = current->ai_addrlen;
+        s->origin_type     = current->ai_socktype;
+        s->origin_protocol = current->ai_protocol;
+        memcpy(&s->origin_addr,
+               current->ai_addr,
+               current->ai_addrlen);
+        ret = request_connect(key, d);
+        if (ret != ERROR) {
+            return ret;
+        }
+    }
+    //  report(key->fd, REPORT_503);
     freeaddrinfo(s->origin_resolution);
     s->origin_resolution = 0;
-
-    return request_connect(key, d);
+    return ret;
 }
 
 static unsigned
@@ -532,7 +517,6 @@ request_connect(struct selector_key *key, struct request_st *d) {
     bool          error = false;
     int           *fd   = d->origin_fd;
     struct proxy5 *s    = ATTACHMENT(key);
-
     *fd = socket(s->origin_domain, s->origin_type, s->origin_protocol);
     if (*fd == -1) {
         error = true;
@@ -568,7 +552,7 @@ request_connect(struct selector_key *key, struct request_st *d) {
     } else {
         // estamos conectados sin esperar... no parece posible
         // saltaríamos directamente a COPY
-        abort(); //TODO: nose que hce esto
+        abort();
     }
 
     finally:
@@ -577,65 +561,120 @@ request_connect(struct selector_key *key, struct request_st *d) {
             close(*fd);
             *fd = -1;
         }
-        return ERROR; // TODO: lo puse yo, no majeamos status hasta ahora
+        report(key->fd, REPORT_500);
+        return ERROR;
     }
-
+    selector_set_interest_key(key, OP_READ);
     return REQUEST_WRITE;
+//    return CONNECTING;
+}
+
+
+////////////////////////////////////////////////////////////////////////////////
+// REQUEST CONNECT
+////////////////////////////////////////////////////////////////////////////////
+
+/** la conexión ha sido establecida (o falló)  */
+static unsigned
+connecting(struct selector_key *key) {
+    int               error;
+    socklen_t         len = sizeof(error);
+    struct request_st *d  = &ATTACHMENT(key)->client.request;
+    struct proxy5     *p  = ATTACHMENT(key);
+
+    if (getsockopt(key->fd, SOL_SOCKET, SO_ERROR, &error, &len) < 0) {
+        p->origin_resolution = p->origin_resolution->ai_next;
+        return REQUEST_RESOLV; // pasasmos a buscar otra resolucion dns
+    } else {
+        if (error == 0) {
+            selector_set_interest(key->s, *d->client_fd,
+                                  OP_READ); // habiamos dejado de pollear al cliente, como nos conectamos pedimos lectura para ver si quedaba algo para leer
+            *d->origin_fd = key->fd;
+            return REQUEST_WRITE;
+        } else { // la conexion no pude ser establecida, desregistramos el fd y cerramos
+            if (p->origin_resolution->ai_next != NULL) {
+                selector_unregister_fd(key->s, key->fd);
+                close(key->fd);
+                p->origin_resolution = p->origin_resolution->ai_next;
+            } else {
+                report(*d->client_fd, REPORT_500);
+                return ERROR;
+            }
+            return request_resolv_done(key); // pasamos a buscar otra resolucion dsn
+            //TODO: la puedo llamar o es mejor retornar el estado?
+        }
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 // REQUEST_WRITE
 ////////////////////////////////////////////////////////////////////////////////
 
-void do_http_request(struct t_request request, char *protocol, int origin_fd) {
-    ssize_t ret;
-    printf("pedi esto\n");
-    char aux[BUFFER_SIZE];
-    sprintf(aux, "%s %s %s\r\nHost: %s\r\nConnection: close\r\n", request.method, request.path, protocol, request.host);
-    ret = send(origin_fd, aux, strlen(aux), 0);
-    printf("%s", aux);
-    for (int i = 0; i != request.num_headers; i++) { //TODO si encuentro algun header conection keep alive lo saco no?
-        if (strncasecmp(request.headers[i].name, "Host", request.headers[i].name_len) != 0 ||
-            strncasecmp(request.headers[i].name, "Connection", request.headers[i].name_len) != 0) {
-            printf("%.*s", (int) request.headers[i].name_len, request.headers[i].name);
-            ret = send(origin_fd, request.headers[i].name, request.headers[i].name_len, 0);
-            printf(": ");
-            ret = send(origin_fd, ": ", 2, 0);
-            printf("%.*s", (int) request.headers[i].value_len, request.headers[i].value);
-            ret = send(origin_fd, request.headers[i].value, request.headers[i].value_len, 0);
-            ret = send(origin_fd, "\r\n", 2, 0);
-            printf("\r\n");
-        }
-    }
-    if (request.body_len > 0) {
-        ret = send(origin_fd, "\r\n", 2, 0);
-        printf("\r\n");
-        ret = send(origin_fd, request.body, (size_t) request.body_len, 0);
-        ret = send(origin_fd, "\r\n", 2, 0);
-        printf("%.*s\r\n", (int) request.body_len, request.body);
-    }
-    ret        = send(origin_fd, "\r\n", 2, 0);
-}
-
 static void
 requestw_init(const unsigned state, struct selector_key *key) {
     struct request_st *d = &ATTACHMENT(key)->client.request;
+    buffer_compact(d->rb, 1);
+    buffer_reset_read(d->rb);
+    printf("pedi esto:\n");
 }
 
 static unsigned
 request_write(struct selector_key *key) {
-    struct request_st *d = &ATTACHMENT(key)->client.request;
+    struct request_st *d  = &ATTACHMENT(key)->client.request;
+    unsigned          ret = REQUEST_WRITE;
+    buffer            *b  = d->rb;
+    uint8_t           *ptr;
+    size_t            count;
+    ssize_t           n;
+    size_t            size;
 
-    unsigned ret = REQUEST_WRITE;
-    buffer   *b  = d->wb;
-    uint8_t  *ptr;
-    size_t   count;
-    ssize_t  n;
+    if (!buffer_can_read(b)) {
+        return REQUEST_WRITE;
+    }
 
-    do_http_request(d->request, "HTTP/1.1", *d->origin_fd);
-    selector_set_interest_key(key, OP_READ);
+    uint8_t *read_ptr = buffer_read_ptr(b, &size);
+    n = send(*d->origin_fd, read_ptr, size, 0);
+    if (n > 0) {
+        printf("%.*s", (int) size, read_ptr);
+        buffer_read_adv(b, n);
+        uint8_t *aux = read_ptr + (n - 4);
+        if (d->request_done || strncmp((char *) aux, "\r\n\r\n", 4) == 0) {
+            ret = RESPONSE;
+            selector_set_interest_key(key, OP_READ);
+            selector_set_interest(key->s, *d->client_fd, OP_WRITE);
+        }
+    } else {
+        report(*d->client_fd, REPORT_500);
+        ret = ERROR;
+    }
+    return ret;
+}
 
-    return RESPONSE_READ; //TODO: estoy asumiendo que se escribio todo el request
+static unsigned
+http_request_read(struct selector_key *key) {
+    struct request_st *d  = &ATTACHMENT(key)->client.request;
+    unsigned          ret = REQUEST_WRITE;
+    buffer            *b  = d->rb;
+    uint8_t           *ptr;
+    size_t            count;
+    ssize_t           n;
+
+    while (buffer_can_write(b)) { // TODO; medio al pedo el while, sino me va a entrar
+        ptr = buffer_write_ptr(b, &count);
+        n   = recv(key->fd, ptr, count, 0);
+        if (n > 0) {
+            buffer_write_adv(b, n);
+        } else if (n == 0) {
+            d->request_done = 1;
+            selector_set_interest_key(key, OP_NOOP);
+            break;
+        } else {
+            // nada que reportar, file descriptor esta roto
+            ret = ERROR;
+            break;
+        }
+    }
+    return ret;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -646,34 +685,396 @@ request_write(struct selector_key *key) {
 static void
 response_init(const unsigned state, struct selector_key *key) {
     struct response_st *r = &ATTACHMENT(key)->orig.response;
-
     r->client_fd       = &ATTACHMENT(key)->client_fd;
     r->origin_fd       = &ATTACHMENT(key)->origin_fd;
     r->is_header_close = 0;
+    r->headers_send    = 0;
+    r->state           = RESPONSE_STATUS;
 }
 
 
 static unsigned
-do_http_response(int client_fd, int origin_fd, int *is_header_close) {
-    char    aux[BUFFER_SIZE];
-    ssize_t recv = read(origin_fd, aux, BUFFER_SIZE);
-    if (recv > 0) {
-        send(client_fd, aux, recv, 0);
-    } else if (recv == 0) {
-        return DONE;
+http_response_read(struct selector_key *key) {
+    struct response_st *r  = &ATTACHMENT(key)->orig.response;
+    buffer             *rb = &ATTACHMENT(key)->write_buffer;
+    size_t             count;
+    unsigned           ret = ATTACHMENT(key)->stm.current->state;
+
+    if (!buffer_can_write(rb)) {
+        return ret;
     }
-    return RESPONSE_READ;
+
+    char    *write_ptr = (char *) buffer_write_ptr(rb, &count);
+    ssize_t recv       = read(*r->origin_fd, write_ptr, count);
+    if (recv > 0) {
+        buffer_write_adv(rb, recv);
+    } else if (recv == 0) {
+        r->response_done = 1;
+//        selector_set_interest_key(key->s,OP_NOOP);
+    } else {
+        report(*r->client_fd, REPORT_503);
+        ret = ERROR;
+    }
+    return ret;
 }
 
-
-/** lee todos los bytes del mensaje de tipo `request' y inicia su proceso */
 static unsigned
-response_read(struct selector_key *key) {
-    struct response_st *r = &ATTACHMENT(key)->orig.response;
+http_response_write(struct selector_key *key) {
+    int                trasformation_on = ATTACHMENT(key)->transformation_on;
+    buffer             *rb              = &ATTACHMENT(key)->write_buffer;
+    struct response_st *r               = &ATTACHMENT(key)->orig.response;
+    int                *chunked_set     = &ATTACHMENT(key)->chunked_set;
+    char               *read_ptr;
+    size_t             count;
+    ssize_t            n;
+    char               header[BUFFER_SIZE];
+    char               value[BUFFER_SIZE];
+    char               *eol;                // pointer to end of line
+    unsigned           ret              = RESPONSE;
 
-    return do_http_response(*r->client_fd, *r->origin_fd, &r->is_header_close);
+    if (!buffer_can_read(rb)) {
+        if (r->response_done) {
+            ret = DONE;
+        }
+        return ret;
+    }
+
+    read_ptr = (char *) buffer_read_ptr(rb, &count);
+    eol      = strstr(read_ptr, "\r\n"); // retorna la primera aparecion de la subcadena \r\n
+    if (eol == NULL || ((eol - read_ptr) + 2) > count) { // no hay una linea completa recivida
+        if (!buffer_can_write(rb)) { // si el buffer esta lleno y no hay una linea completa retornamos error
+            report(*r->client_fd, REPORT_507);
+            ret = ERROR;
+        }
+        return ret;
+    }
+
+    *eol = '\0';// agrego para poder usar funciones de comparacion de strings, dsp lo modificamos de neuvo a \r
+
+    switch (r->state) {
+        case RESPONSE_STATUS:
+            *eol = '\r';
+            n = send(*r->client_fd, read_ptr, (size_t) (eol - read_ptr) + 2, 0);
+            if (n > 0) {
+                buffer_read_adv(rb, (eol - read_ptr) + 2);
+                r->state = RESPONSE_HEADERS;
+            } else {
+                // nada que reportar, file descriptor esta roto
+                ret = ERROR;
+            }
+            // agregamos el header connection close, ya que no soportamos conexiones persistentes
+            char *conection_close_msg = "Connection: close\r\n";
+            n = send(*r->client_fd, conection_close_msg, strlen(conection_close_msg), 0);
+            if (n < 0) {
+                // nada que reportar, file descriptor esta roto
+                ret = ERROR;
+            }
+            break;
+        case RESPONSE_HEADERS:
+            if (sscanf(read_ptr, "%[^:/]: %s", header, value) == 2) {
+                *eol = '\r';
+                if (strcasecmp(header, "Connection") ==
+                    0) {  // enonctramos un header, chequeamso si es de conexion, si lo es no lo enviamos, queremos que sea no persistente
+                    buffer_read_adv(rb, (eol - read_ptr) + 2);
+                } else if (trasformation_on && (strcasecmp(header, "Content-Length") ==
+                                                0)) { // censuramos si esta la transforamcion activada
+                    buffer_read_adv(rb, (eol - read_ptr) + 2);
+                } else if (trasformation_on && (strcasecmp(header, "Transfer-Encoding") == 0)) {
+                    if (strcasecmp(value, "chunked") == 0) {
+                        *chunked_set = 1;
+                        n = send(*r->client_fd, read_ptr, (eol - read_ptr) + 2, 0);
+                        buffer_read_adv(rb, (eol - read_ptr) + 2);
+                    } else { // censuramos si es distinto de chunked
+                        buffer_read_adv(rb, (eol - read_ptr) + 2);
+                    }
+                } else {
+                    n = send(*r->client_fd, read_ptr, (eol - read_ptr) + 2, 0); // mando el header
+                    if (n > 0) {
+                        buffer_read_adv(rb, (eol - read_ptr) + 2);
+                    } else {
+                        // nada que reportar, file descriptor esta roto
+                        ret = ERROR;
+                    }
+                }
+            } else if (eol == read_ptr) { // es una linea vacia, a partir de ahora lo que sigue es el body
+                *eol = '\r';
+                if (trasformation_on) {
+                    buffer_read_adv(rb, 2);
+                }
+                r->state = RESPONSE_BODY;
+                goto respone_body;
+            }
+            break;
+        case RESPONSE_BODY:
+        respone_body:
+            if (trasformation_on) {
+                if (!*chunked_set) {
+                    char *trasfer_encoding_chunked_msg = "Transfer-Encoding: chunked\r\n";
+                    n = send(*r->client_fd, trasfer_encoding_chunked_msg, strlen(trasfer_encoding_chunked_msg), 0);
+                    if (n < 0) {
+                        // nada que reportar, file descriptor esta roto
+                        ret = ERROR;
+                    }
+                }
+                ret = TRANSFORM;
+            } else {
+                ret = COPY_BODY;
+            }
+            break;
+    }
+    return ret;
 }
 
+////////////////////////////////////////////////////////////////////////////////
+// COPY_BODY
+////////////////////////////////////////////////////////////////////////////////
+
+static unsigned
+http_body_write(struct selector_key *key) {
+    buffer             *rb = &ATTACHMENT(key)->write_buffer;
+    struct response_st *r  = &ATTACHMENT(key)->orig.response;
+    char               *read_ptr;
+    size_t             count;
+    ssize_t            n;
+    unsigned           ret = COPY_BODY;
+
+    if (!buffer_can_read(rb)) {
+        if (r->response_done) {
+            ret = DONE;
+        }
+        return ret;
+    }
+
+    read_ptr = (char *) buffer_read_ptr(rb, &count);
+    n        = send(*r->client_fd, read_ptr, count, 0);
+    if (n > 0) {
+        buffer_read_adv(rb, n);
+    } else {
+        // nada que reportar, file descriptor esta roto
+        ret = ERROR;
+    }
+
+    return ret;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// TRANSFORM
+////////////////////////////////////////////////////////////////////////////////
+static void
+transf_write(struct selector_key *key);
+
+static void
+transf_read(struct selector_key *key);
+
+static void
+transf_close(struct selector_key *key);
+
+static const struct fd_handler transformation_handler = {
+        .handle_read   = transf_read,
+        .handle_write  = transf_write,
+        .handle_close  = transf_close,
+        .handle_block  = NULL,
+};
+
+
+/*lemos el resultado de la transformacion y la guardamos en un buffer, luego seteamos interes de escritura en el fd del cliemte
+ * donde guardadremos el contenido del buffer*/
+static void
+transf_read(struct selector_key *key) {
+    struct transform_st *r    = &ATTACHMENT(key)->orig.transform;
+    buffer              *buff = r->t_wb; // en este buffer se guarda la salida
+    size_t              count;
+    uint8_t             *wrt_ptr;
+    ssize_t             ret;
+
+    if (!buffer_can_write(buff)) {
+        return;
+    }
+
+    wrt_ptr = buffer_write_ptr(buff, &count);
+    ret     = (size_t) read(r->t_readfd, wrt_ptr, count);
+    if (ret < 0) {
+        // cerramos la transformacion
+    }
+    buffer_write_adv(buff, ret);
+
+//    if (!buffer_can_read(buff) && phr_decode_chunked_is_done(&r->decoder)) {
+//        // todo: set en done la transformacion
+//        r->trasnformation_done = 1;
+//        selector_set_interest(key->s, r->t_readfd, OP_NOOP);
+//    }
+}
+
+/*lemos el response body guardado en el buffer y se lo pasamos al programa */ // TODO : como pija mando el eof
+static void
+transf_write(struct selector_key *key) {
+    struct transform_st *r    = &ATTACHMENT(key)->orig.transform;
+    buffer              *buff = r->t_rb; // en este buffer leemos contendido del response body para pasarselo a nuestro programa transformador
+    size_t              count;
+    uint8_t             *read_ptr;
+    ssize_t             ret;
+    ssize_t             done  = 0;
+
+    if (!buffer_can_read(buff)) {
+        return;
+    }
+
+    read_ptr = buffer_read_ptr(buff, &count);
+
+    /* hago un backup de la cantidad que podemos leer, el decoder borro chuncks y trailers del buffer por lo que su contenido solo
+     * puede disminuir, no aumentar. Este back up sirve para no perder el puntero a write, por lo que una vez hecho el decode avanzamos la cantidad leida
+    */
+    size_t count_back_up = count;
+
+    if (ATTACHMENT(key)->chunked_set) {
+        done = decode_chunked(&r->decoder, (char *) read_ptr, &count);
+        if (done == 1) {
+            r->transform_done = 1;
+
+            /* TODO: matamos al proceso esclavo ya que no queda nada por transfromar */
+
+
+//        selector_set_interest(key->s, *r->origin_fd, OP_NOOP);
+//        selector_set_interest(key->s, r->t_writefd, OP_NOOP);
+        }
+
+    }
+    ret = write(r->t_writefd, read_ptr, count);
+    if (ret < 0) {
+        // cerramos la transformacion
+    }
+
+    buffer_read_adv(buff,
+                    count_back_up); // todo: estoy asumiendo que esto se envio todo, caso que no deberia encerrarlo en un while?, si entra de nuevo va querer decodificar lo que leyo mezclandome el estado del decodificador
+
+}
+
+static void
+transf_close(struct selector_key *key) {
+    struct transform_st *r = &ATTACHMENT(key)->orig.transform;
+    //TODO:
+}
+
+static void
+transform_init(const unsigned state, struct selector_key *key) {
+    struct transform_st *r     = &ATTACHMENT(key)->orig.transform;
+    struct proxy5       *proxy = ATTACHMENT(key);
+    r->client_fd                   = &ATTACHMENT(key)->client_fd;
+    r->origin_fd                   = &ATTACHMENT(key)->origin_fd;
+    r->t_rb                        = &ATTACHMENT(key)->write_buffer;
+    r->t_wb                        = &ATTACHMENT(key)->read_buffer;
+    r->decoder.hex_count           = 0;
+    r->decoder.state               = CHUNK_SIZE;
+    r->decoder.bytes_left_in_chunk = 0;
+    r->transform_done              = 0;
+
+    int infd[2];
+    int outfd[2];
+
+    pipe(infd);
+    pipe(outfd);
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        report(*r->client_fd, REPORT_TRANSFORMATION_ERROR);
+        // TODO: cerramos todo o que onda?
+    }
+
+    if (pid == 0) {
+        // por las dudas hago un flush en todos
+        fflush(stdin);
+        fflush(stdout);
+        fflush(stderr);
+        dup2(infd[0], STDIN_FILENO); // lectura
+        dup2(outfd[1], STDOUT_FILENO); // escritura
+        close(infd[1]); // cierro escritura en in
+        close(outfd[0]); // cierro lectura en out
+        close(STDERR_FILENO);
+
+        execl("/bin/sh", "sh", "-c", "cat", (char *) 0);
+    } else {
+        close(infd[0]); // cierrro lectura
+        close(outfd[1]);  // cierro escritura
+        r->t_readfd  = outfd[0];
+        r->t_writefd = infd[1];
+
+        selector_fd_set_nio(r->t_readfd);
+        selector_fd_set_nio(r->t_writefd);
+
+        if (SELECTOR_SUCCESS != selector_register(key->s, r->t_writefd, &transformation_handler, OP_WRITE, proxy)) {
+            report(*r->client_fd, REPORT_TRANSFORMATION_ERROR);
+            return;
+
+            //TODO: llamao a la funcion proxy donde desde aca directo o medio villero?
+
+        }
+        if (SELECTOR_SUCCESS != selector_register(key->s, r->t_readfd, &transformation_handler, OP_READ, proxy)) {
+            report(*r->client_fd, REPORT_TRANSFORMATION_ERROR);
+            return;
+
+
+            //TODO: llamao a la funcion proxy donde desde aca directo o medio villero?
+        }
+    }
+}
+
+/* Escribe el contenido transformado en el el cliente */
+static unsigned
+transform_write(struct selector_key *key) {
+    // buffer              *rb = &ATTACHMENT(key)->read_buffer;
+    struct transform_st *r    = &ATTACHMENT(key)->orig.transform;
+    buffer              *buff = r->t_wb;
+    char                *read_ptr;
+    size_t              count;
+    ssize_t             n;
+    char                aux[BUFFER_SIZE];
+
+    if (!buffer_can_read(buff)) {
+        if (r->transform_done) {
+            return DONE;
+        }
+        return TRANSFORM;
+    }
+    read_ptr = (char *) buffer_read_ptr(buff, &count);
+    dprintf(*r->client_fd, "\r\n%x\r\n",
+            (int) count); // TODO: que hacemos si send no manda la cantidad que yo especifique aca?
+    n = send(*r->client_fd, read_ptr, count, 0);
+    if (n > 0) {
+        buffer_read_adv(buff, n);
+    } else {
+        report(*r->client_fd, REPORT_TRANSFORMATION_ERROR);
+        return ERROR;
+    }
+    return TRANSFORM;
+}
+
+
+static unsigned //leemos del origin server y guardamos un el buffer
+transform_read(struct selector_key *key) {
+    //struct transform_st *r  = &ATTACHMENT(key)->orig.transform;
+    struct transform_st *r    = &ATTACHMENT(key)->orig.transform;
+    buffer              *buff = r->t_rb;
+    //buffer              *wb = &ATTACHMENT(key)->write_buffer;
+    size_t              count;
+    char                *write_ptr;
+
+    if (!buffer_can_write(buff)) {
+        return TRANSFORM;
+    }
+
+    write_ptr = (char *) buffer_write_ptr(buff, &count);
+    ssize_t ret = recv(*r->origin_fd, write_ptr, count, 0);
+    if (ret > 0) {
+        buffer_write_adv(buff, ret);
+    } else if (ret == 0) {
+        r->transform_done = 1;
+    } else {
+        report(*r->client_fd, REPORT_TRANSFORMATION_ERROR);
+        return ERROR;
+    }
+
+    return TRANSFORM;
+}
 
 /** definición de handlers para cada estado */
 static const struct state_definition client_statbl[] = {
@@ -687,21 +1088,39 @@ static const struct state_definition client_statbl[] = {
                 .on_block_ready   = request_resolv_done,
         },
         {
-                .state            = REQUEST_WRITE,
-                .on_arrival       = requestw_init,
-                .on_write_ready   = request_write,
+                .state            = CONNECTING,
+                .on_write_ready   = connecting,
         },
         {
-                .state            = RESPONSE_READ,
-                .on_arrival       = response_init,
-                .on_read_ready    = response_read,
+                .state = REQUEST_WRITE,
+                .on_arrival = requestw_init,
+                .on_write_ready = request_write,
+                .on_read_ready = http_request_read,
         },
         {
-                .state            = DONE,
+                .state = RESPONSE,
+                .on_arrival = response_init,
+                .on_read_ready = http_response_read,
+                .on_write_ready = http_response_write,
+        },
+        {
+                .state = TRANSFORM,
+                .on_arrival = transform_init,
+                .on_read_ready = transform_read,
+                .on_write_ready = transform_write,
+        },
+        {
+                .state = COPY_BODY,
+                .on_read_ready = http_response_read,
+                .on_write_ready = http_body_write,
 
         },
         {
-                .state            = ERROR,
+                .state = DONE,
+
+        },
+        {
+                .state = ERROR,
         }
 };
 

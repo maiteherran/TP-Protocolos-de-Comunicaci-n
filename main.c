@@ -13,6 +13,7 @@
 
 #include "Utils/selector.h"
 #include "proxy5nio.h"
+#include "Utils/log.h"
 
 static bool done = false;
 
@@ -33,6 +34,9 @@ main(const int argc, const char **argv) {
 
     // no tenemos nada que leer de stdin
     close(0);
+
+    logger_init();
+    log_debug("hola");
 
     const char *err_msg = NULL;
     selector_status ss = SELECTOR_SUCCESS;
@@ -69,6 +73,7 @@ main(const int argc, const char **argv) {
     // esto ayuda mucho en herramientas como valgrind.
     signal(SIGTERM, sigterm_handler);
     signal(SIGINT, sigterm_handler);
+    signal(SIGPIPE, SIG_IGN); // ignoro los SIGPIPE de esta manera ya que mac no soporta MSG_NOSIGNAL
 
     if (selector_fd_set_nio(server) == -1) {
         err_msg = "getting server socket flags";

@@ -3,28 +3,23 @@
 #include <ctype.h>
 #include "http_parser.h"
 
-#define  BUFFER_SIZE 1024
-
 static const char   *CRLF          = "\r\n";
 static const char   *HOST_HEADER_M = "Host";
 static const size_t CRLF_LENGTH    = 2;
 
-char *ltrim(char *s)
-{
-    while(isspace(*s)) s++;
+char *ltrim(char *s) {
+    while (isspace(*s)) s++;
     return s;
 }
 
-char *rtrim(char *s)
-{
-    char* back = s + strlen(s);
-    while(isspace(*--back));
-    *(back+1) = '\0';
+char *rtrim(char *s) {
+    char *back = s + strlen(s);
+    while (isspace(*--back));
+    *(back + 1) = '\0';
     return s;
 }
 
-char *trim(char *s)
-{
+char *trim(char *s) {
     return rtrim(ltrim(s));
 }
 
@@ -49,13 +44,13 @@ int check_host_in_url(struct request_parser *p) {
             printf("Bad request\n");
             return 0;
         }
-        p->request->port = 80;//cport;
+        p->request->port = cport;
         strcpy(p->request->host, hostaux);
         return 1;
     }
+    p->request->port     = 80;
     return 0;
 }
-
 
 static void
 remaining_set(struct request_parser *p, int n) {
@@ -69,28 +64,15 @@ remaining_is_done(struct request_parser *p) {
 }
 
 static enum request_state
-crlf(const uint8_t c, struct request_parser *p) {
-    if (c == CRLF[p->i]) {
-        if (p->i == CRLF_LENGTH) {
-            remaining_set(p, BUFFER_SIZE);
-            return request_header;
-        }
-        return request_crlf;
-    }
-    return request_error;
-}
-
-
-static enum request_state
 header(const uint8_t c, struct request_parser *p) {
     if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '-') {
-        p->header[p->i] = c;
+        p->header[p->i++] = c;
         return request_header;
     } else if (c == ' ') {
         return request_header;
     } else if (":") {
-        p->header[p->i] = '\0';
-        if (strcasecmp(trim(p->header), "Host") == 0) {
+        p->header[p->i++] = '\0';
+        if (strcasecmp(trim(p->header), "Host") == 0) { // no hay nada a que hacer trim no?
             remaining_set(p, BUFFER_SIZE);
             return request_header_host;
         }
@@ -105,14 +87,38 @@ header_host(const uint8_t c, struct request_parser *p) {
     switch (c) {
         case '\r':
             next = request_done;
-//            remaining_set(p, CRLF_LENGTH);
-//            next = crlf(c, p);
             break;
         default:
             if (c != ' ') {
-                p->request->host[p->i] = c;
+                p->request->host[p->i++] = c;
             }
             next = request_header_host;
+    }
+    return next;
+}
+
+static enum request_state
+crlf(const uint8_t c, struct request_parser *p) {
+    if (p->i < CRLF_LENGTH) {
+        if (c != CRLF[p->i++]) {
+            return request_error;
+        }
+        return request_crlf;
+    }
+    remaining_set(p, BUFFER_SIZE);
+    return header(c, p);
+}
+
+static enum request_state
+header_value(const uint8_t c, struct request_parser *p) {
+    enum request_state next;
+    switch (c) {
+        case '\r':
+            remaining_set(p, CRLF_LENGTH);
+            next = crlf(c, p);
+            break;
+        default: // el valor de este header no me interesa
+            next = request_header_value;
     }
     return next;
 }
@@ -146,7 +152,8 @@ spaces_before_version(const uint8_t c, struct request_parser *p) {
 
 static enum request_state
 method(const uint8_t c, struct request_parser *p) {
-    if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')) { //todo: no puede arrancar con esapacios, pero a mi no me interesan
+    if ((c >= 'A' && c <= 'Z') ||
+        (c >= 'a' && c <= 'z')) { //no puede arrancar con espacios, lo probe con netcat a google y me reboto
         return request_method;
     } else if (c == ' ') {
         return request_spaces_before_url;
@@ -167,7 +174,7 @@ url(const uint8_t c, struct request_parser *p) {
             break;
         default: // caracteres de la url
             if (!remaining_is_done(p)) { // mientras que no se haya llenado el buffer
-                p->url[p->i] = c;
+                p->url[p->i++] = c;
                 next = request_url;
             } else {
                 next = request_error;
@@ -190,14 +197,6 @@ spaces_before_url(const uint8_t c, struct request_parser *p) {
     }
     return next;
 }
-
-extern void
-request_parser_init(struct request_parser *p) {
-    p->state = request_method;
-    p->i     = 0;
-    memset(p->request, 0, sizeof(*(p->request)));
-}
-
 
 extern enum request_state
 request_parser_feed(struct request_parser *p, const uint8_t c) {
@@ -223,6 +222,9 @@ request_parser_feed(struct request_parser *p, const uint8_t c) {
             break;
         case request_header:
             next = header(c, p);
+            break;
+        case request_header_value:
+            next = header_value(c, p);
             break;
         case request_header_host:
             next = header_host(c, p);
@@ -250,16 +252,21 @@ request_is_done(const enum request_state st, bool *errored) {
 extern enum request_state
 request_consume(buffer *b, struct request_parser *p, bool *errored) {
     enum request_state st = p->state;
-
     while (buffer_can_read(b)) {
         const uint8_t c = buffer_read(b);
         st = request_parser_feed(p, c);
-        p->i++;
         if (request_is_done(st, errored)) {
             break;
         }
     }
     return st;
+}
+
+extern void
+request_parser_init(struct request_parser *p) {
+    p->state = request_method;
+    p->i     = 0;
+    memset(p->request, 0, sizeof(*(p->request)));
 }
 
 extern void
