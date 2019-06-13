@@ -2,7 +2,7 @@
 #define HPCPPARSER0_HPCPREQUEST_H
 #include <stdint.h>
 #include <stdbool.h>
-#include "../Utils/buffer.h"
+#include "../../Utils/buffer.h"
 
 /*   The HPCP request is formed as follows:
 *
@@ -105,7 +105,7 @@ static enum hpcp_request_state current_arg_parser (uint8_t c, struct hpcp_reques
 
 extern bool hpcp_request_is_done(enum hpcp_request_state st, bool *errored);
 
-extern void free_hpcp_request (struct hpcp_request_parser *p);
+extern void free_hpcp_request (struct hpcp_request * request);
 
 static void nargs_initializer (uint8_t c, struct hpcp_request_parser *p);
 

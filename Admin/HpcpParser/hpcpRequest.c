@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <stdlib.h>
-#include "../Utils/buffer.h"
+#include "../../Utils/buffer.h"
 #include "hpcpRequest.h"
 
 #define N(x) (sizeof(x)/sizeof((x)[0]))
@@ -58,7 +58,6 @@ extern enum hpcp_request_state hpcp_request_parser_feed (struct hpcp_request_par
         case hpcp_request_error_invalid_transformation_program:
             printf("state: %d\n", p->state);
             next = p->state;
-            free_hpcp_request(p); //TODO esto va en otro lugar
             break;
         default:
             next = hpcp_request_error;
@@ -75,7 +74,7 @@ static enum hpcp_request_state cmd_parser (const uint8_t c, struct hpcp_request_
     return hpcp_request_nargs;
 }
 
-static enum hpcp_request_state nargs_parser (const uint8_t c, struct hpcp_request_parser *p) {
+static enum hpcp_request_state nargs_parser(const uint8_t c, struct hpcp_request_parser *p) {
     nargs_initializer (c, p);
     if (c == 0x00 ) {
         return hpcp_request_done;
@@ -83,7 +82,7 @@ static enum hpcp_request_state nargs_parser (const uint8_t c, struct hpcp_reques
     return hpcp_request_current_arglen;
 }
 
-static void nargs_initializer (const uint8_t c, struct hpcp_request_parser *p) {
+static void nargs_initializer(const uint8_t c, struct hpcp_request_parser *p) {
     p->nargs = c;
     p->request->nargs = c;
     p->current_arg = 0;
@@ -101,12 +100,12 @@ static enum hpcp_request_state current_arglen_parser (const uint8_t c, struct hp
     return hpcp_request_current_arg;
 }
 
-extern void free_hpcp_request (struct hpcp_request_parser *p) {
-    for (int i = 0; i < p->nargs ; i++ ) {
-        free (p->request->args[i]);
+extern void free_hpcp_request(struct hpcp_request * request) {
+    for (int i = 0; i < request->nargs ; i++ ) {
+        free (request->args[i]);
     }
-    free (p->request->args);
-    free (p->request->args_sizes);
+    free (request->args);
+    free (request->args_sizes);
 }
 
 static enum hpcp_request_state current_arg_parser (const uint8_t c, struct hpcp_request_parser *p) {
