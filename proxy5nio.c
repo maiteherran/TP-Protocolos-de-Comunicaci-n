@@ -516,7 +516,7 @@ request_resolv_done(struct selector_key *key) {
             return ret;
         }
     }
-    //  report(key->fd, REPORT_503);
+      report(key->fd, REPORT_503);
     freeaddrinfo(s->origin_resolution);
     s->origin_resolution = 0;
     return ret;
@@ -683,26 +683,26 @@ origin_write(struct selector_key *key) {
 
     char *read_ptr = (char *) buffer_read_ptr(buff, &size);
 
-    if (!d->header_close_added) {
-        if ((eol = strstr(read_ptr, "\r\n")) != NULL) { // es la primera linea de la respuesta
-            n = write(origin_fd, read_ptr, (size_t) (eol - read_ptr) + 2);
-            if (n >= 0) {
-                buffer_read_adv(buff, (eol - read_ptr) + 2);
-            } else {
-                log_error("Error en el origin server");
-                ret = O_ERROR;
-            }
-            // agregamos el header connection close, ya que no soportamos conexiones persistentes
-            char *conection_close_msg = "Connection: close\r\n";
-            n = write(origin_fd, conection_close_msg, strlen(conection_close_msg));
-            if (n <= 0) {
-                log_error("Error en el origin server");
-                ret = O_ERROR;
-            }
-            d->header_close_added = 1;
-        }
-        return ret;
-    }
+//    if (!d->header_close_added) {
+//        if ((eol = strstr(read_ptr, "\r\n")) != NULL) { // es la primera linea de la respuesta
+//            n = write(origin_fd, read_ptr, (size_t) (eol - read_ptr) + 2);
+//            if (n >= 0) {
+//                buffer_read_adv(buff, (eol - read_ptr) + 2);
+//            } else {
+//                log_error("Error en el origin server");
+//                ret = O_ERROR;
+//            }
+//            // agregamos el header connection close, ya que no soportamos conexiones persistentes
+//            char *conection_close_msg = "Connection: close\r\n";
+//            n = write(origin_fd, conection_close_msg, strlen(conection_close_msg));
+//            if (n <= 0) {
+//                log_error("Error en el origin server");
+//                ret = O_ERROR;
+//            }
+//            d->header_close_added = 1;
+//        }
+//        return ret;
+//    }
 
     n = write(origin_fd, read_ptr, size);
     if (n > 0) {
@@ -1287,6 +1287,7 @@ proxyv5_close(struct selector_key *key) {
 
 static void
 proxyv5_done(struct selector_key *key) {
+    log_debug("CONEXION CERRADA");
     const int     fds[] = {
             ATTACHMENT(key)->client_fd,
             ATTACHMENT(key)->origin_fd,
