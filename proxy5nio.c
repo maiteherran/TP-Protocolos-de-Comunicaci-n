@@ -1220,7 +1220,6 @@ static const struct state_definition client_statbl[] = {
         },
         {
                 .state            = COPY_BODY,
-                .on_read_ready    = client_read,
                 .on_write_ready   = http_body_write,
                 .on_read_ready    = http_read,
 
