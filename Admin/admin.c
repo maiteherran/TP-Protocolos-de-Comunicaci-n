@@ -14,6 +14,7 @@
 #include "../Utils/buffer.h"
 #include "../Utils/stm.h"
 #include "HpcpParser/hpcpRequest.h"
+#include "config.h"
 
 #define N(x) (sizeof(x)/sizeof((x)[0]))
 #define MSG_NOSIGNAL       0x4000
@@ -34,6 +35,8 @@
 #define CONCURRENT_CONNECTIONS 0x01
 #define HISTORIC_ACCESSES 0x02
 #define TRANSFERRED_BYTES 0X04
+
+extern conf proxy_configurations;
 
 /** maquina de estados general */
 enum socks_v5state {
@@ -536,8 +539,14 @@ static unsigned cmd_get_configurations_process(struct hpcp_request *request) {
 }
 
 static unsigned get_transformation_program(struct hpcp_request *request) {
+    if (proxy_configurations.transformation_program == NULL) {
+
+    } else {
+
+    }
     return COMAND_WRITE;
 }
+
 
 static unsigned get_transformation_program_status(struct hpcp_request *request) {
     return COMAND_WRITE;

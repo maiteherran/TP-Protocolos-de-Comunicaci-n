@@ -14,4 +14,5 @@ typedef struct {
     char **media_types;
 } conf;
 
+conf proxy_configurations;
 #endif //PROBANDOTPPROTOS_COMANDS_H

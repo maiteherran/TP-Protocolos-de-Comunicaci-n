@@ -111,4 +111,6 @@ static void nargs_initializer (uint8_t c, struct hpcp_request_parser *p);
 
 static enum hpcp_request_state validate_request (struct hpcp_request *request);
 
+extern int hpcp_response(buffer *b, const enum hpcp_response_status response_status, uint8_t nresp, uint8_t* data_sizes, uint8_t** data);
+
 #endif //HPCPPARSER0_HPCPREQUEST_H
