@@ -277,7 +277,7 @@ proxy5_new(int client_fd) {
     buffer_init(&ret->write_buffer, N(ret->raw_buff_b), ret->raw_buff_b);
     buffer_compact(&ret->read_buffer, 0);
 
-    ret->transformation_on = 1;
+    ret->transformation_on = 0;
     ret->chunked_set       = 0;
 
     ret->references = 1;
@@ -427,6 +427,10 @@ request_read(struct selector_key *key) {
     int      st;
 
     if (!buffer_can_write(buff)) {
+        /*
+         * Si llegamos aca, el buffer esta lleno y no encontramos un host a cual conectarnos, por lo que aun no tenemos
+         * donde vaciar el buffer. Enviamos un error 400 y retonamos con error cerrando la conexion
+         */
         report(*d->client_fd, REPORT_400);
         return ERROR;
     }
@@ -623,8 +627,8 @@ connecting(struct selector_key *key) {
 static void
 origin_comunicate_init(const unsigned state, struct selector_key *key) {
     struct request_st *d = &ATTACHMENT(key)->request;
-//    buffer_compact(d->rb, 1);
-//    buffer_reset_read(d->rb);
+    buffer_compact(d->rb, 1);
+    buffer_reset_read(d->rb);
     d->header_close_added = 0;
 }
 
@@ -652,8 +656,8 @@ origin_read(struct selector_key *key) {
          * acaban los datos del buffer pasamos al estado DONE
          */
         d->response_done = 1;
-        selector_set_interest_key(key, OP_NOOP);
-        selector_set_interest(key->s, *d->client_fd, OP_WRITE);
+//        selector_set_interest_key(key, OP_NOOP);
+//        selector_set_interest(key->s, *d->client_fd, OP_WRITE);
     } else {
         log_error("Error en el origin server");
         ret = O_ERROR;
@@ -683,31 +687,31 @@ origin_write(struct selector_key *key) {
 
     char *read_ptr = (char *) buffer_read_ptr(buff, &size);
 
-//    if (!d->header_close_added) {
-//        if ((eol = strstr(read_ptr, "\r\n")) != NULL) { // es la primera linea de la respuesta
-//            n = write(origin_fd, read_ptr, (size_t) (eol - read_ptr) + 2);
-//            if (n >= 0) {
-//                buffer_read_adv(buff, (eol - read_ptr) + 2);
-//            } else {
-//                log_error("Error en el origin server");
-//                ret = O_ERROR;
-//            }
-//            // agregamos el header connection close, ya que no soportamos conexiones persistentes
-//            char *conection_close_msg = "Connection: close\r\n";
-//            n = write(origin_fd, conection_close_msg, strlen(conection_close_msg));
-//            if (n <= 0) {
-//                log_error("Error en el origin server");
-//                ret = O_ERROR;
-//            }
-//            d->header_close_added = 1;
-//        }
-//        return ret;
-//    }
+    if (!d->header_close_added) {
+        if ((eol = strstr(read_ptr, "\r\n")) != NULL) { // es la primera linea del request
+            n = write(origin_fd, read_ptr, (size_t) (eol - read_ptr) + 2);
+            if (n >= 0) {
+                buffer_read_adv(buff, (eol - read_ptr) + 2);
+            } else {
+                log_error("Error en el origin server");
+                ret = O_ERROR;
+            }
+            // agregamos el header connection close, ya que no soportamos conexiones persistentes
+            char *conection_close_msg = "Connection: close\r\n";
+            n = write(origin_fd, conection_close_msg, strlen(conection_close_msg));
+            if (n <= 0) {
+                log_error("Error en el origin server");
+                ret = O_ERROR;
+            }
+            d->header_close_added = 1;
+        }
+        return ret;
+    }
 
     n = write(origin_fd, read_ptr, size);
     if (n > 0) {
         buffer_read_adv(buff, n);
-        printf("%.*s", (int) size, read_ptr);
+        //printf("%.*s", (int) size, read_ptr);
     } else if (n == 0) {
         log_debug("cerro escritura el origin");
     } else {
@@ -729,8 +733,8 @@ client_comunicate_init(const unsigned state, struct selector_key *key) {
     r->client_fd = &ATTACHMENT(key)->client_fd;
     r->origin_fd = &ATTACHMENT(key)->origin_fd;
     r->state     = RESPONSE_STATUS;
-    buffer_compact(d->rb, 1);
-    buffer_reset_read(d->rb);
+//    buffer_compact(d->rb, 1);
+//    buffer_reset_read(d->rb);
 }
 
 /*Lectura del request del cliente*/
@@ -755,7 +759,7 @@ client_read(struct selector_key *key) {
         buffer_write_adv(buff, n);
     } else if (n == 0) {
         d->request_done = 1;
-        selector_set_interest_key(key, OP_WRITE);
+//        selector_set_interest_key(key, OP_WRITE);
     } else {
         log_error("Error en el cliente");
         ret = ERROR;
@@ -882,6 +886,36 @@ client_write(struct selector_key *key) {
 ////////////////////////////////////////////////////////////////////////////////
 // COPY_BODY
 ////////////////////////////////////////////////////////////////////////////////
+
+/*Lectura del request del cliente*/
+static unsigned
+http_read(struct selector_key *key) {
+    struct request_st *d    = &ATTACHMENT(key)->request;
+    buffer            *buff = &ATTACHMENT(key)->read_buffer;
+    unsigned          ret   = COPY_BODY;
+    bool              error = false;
+    uint8_t           *ptr;
+    size_t            count;
+    ssize_t           n;
+    int               st;
+
+    if (!buffer_can_write(buff)) {
+        return ret;
+    }
+
+    ptr = buffer_write_ptr(buff, &count);
+    n   = read(key->fd, ptr, count);
+    if (n > 0) {
+        buffer_write_adv(buff, n);
+    } else if (n == 0) {
+        d->request_done = 1;
+//        selector_set_interest_key(key, OP_WRITE);
+    } else {
+        log_error("Error en el cliente");
+        ret = ERROR;
+    }
+    return ret;
+}
 
 static unsigned
 http_body_write(struct selector_key *key) {
@@ -1188,6 +1222,7 @@ static const struct state_definition client_statbl[] = {
                 .state            = COPY_BODY,
                 .on_read_ready    = client_read,
                 .on_write_ready   = http_body_write,
+                .on_read_ready    = http_read,
 
         },
         {
