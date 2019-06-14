@@ -9,9 +9,9 @@
 #include "HpcpParser/hpcpRequest.h"
 
 typedef struct {
-    char * transformation_program;
+    char     *transformation_program;
     unsigned transformation_on;
-    char **media_types;
+    char     **media_types;
 } conf;
 
 #endif //PROBANDOTPPROTOS_COMANDS_H

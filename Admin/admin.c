@@ -13,6 +13,7 @@
 #include <arpa/inet.h>
 #include "../Utils/buffer.h"
 #include "../Utils/stm.h"
+#include "config.h"
 #include "HpcpParser/hpcpRequest.h"
 
 #define N(x) (sizeof(x)/sizeof((x)[0]))
