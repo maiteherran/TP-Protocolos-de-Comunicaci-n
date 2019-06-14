@@ -277,7 +277,7 @@ proxy5_new(int client_fd) {
     buffer_init(&ret->write_buffer, N(ret->raw_buff_b), ret->raw_buff_b);
     buffer_compact(&ret->read_buffer, 0);
 
-    ret->transformation_on = 0;
+    ret->transformation_on = 1;
     ret->chunked_set       = 0;
 
     ret->references = 1;
@@ -712,7 +712,7 @@ origin_write(struct selector_key *key) {
         log_debug("cerro escritura el origin");
     } else {
         log_error("Error en el origin server");
-        ret = ERROR;
+        ret = O_ERROR;
     }
 
     return ret;
@@ -1061,7 +1061,7 @@ transform_init(const unsigned state, struct selector_key *key) {
         close(outfd[0]); // cierro lectura en out
         close(STDERR_FILENO);
 
-        execl("/bin/sh", "sh", "-c", "cat", (char *) 0);
+        execl("/bin/sh", "sh", "-c", "cat > /tmp/foo && cat /tmp/foo", (char *) 0);
     } else {
         r->slavePid = pid;
 
