@@ -13,13 +13,17 @@
 #include <signal.h>
 #include "../Utils/buffer.h"
 #include "../Utils/stm.h"
-#include "../Parser/http_chunk_decoder.h"
+#include "Parsers/http_chunk_decoder.h"
+#include "Parsers/http_parser.h"
 #include "proxy5nio.h"
 #include "proxy_reporter.h"
 #include "../Utils/log.h"
+#include "metrics.h"
+
 
 #define N(x) (sizeof(x)/sizeof((x)[0]))
 #define BUFFER_SIZE 4096
+#define MSG_NOSIGNAL       0x4000
 
 //lista:
 //Host: bar:9090

@@ -12,8 +12,11 @@
 #include <netinet/tcp.h>
 
 #include "Utils/selector.h"
+#include "Admin/admin.h"
 #include "Proxy/proxy5nio.h"
 #include "Utils/log.h"
+
+int server_init(int port, int protocol, const struct fd_handler * handler);
 
 static bool done = false;
 
@@ -23,51 +26,37 @@ sigterm_handler(const int signal) {
     done = true;
 }
 
+const char *err_msg = NULL;
+selector_status ss = SELECTOR_SUCCESS;
+fd_selector selector = NULL;
+
+const struct fd_handler proxyv5 = {
+        .handle_read       = proxyv5_passive_accept,
+        .handle_write      = NULL,
+        .handle_close      = NULL, // nada que liberar
+};
+
+const struct fd_handler admin_handler = {
+        .handle_read       = socksv5_passive_accept,
+        .handle_write      = NULL,
+        .handle_close      = NULL, // nada que liberar
+};
+
 int
 main(const int argc, const char **argv) {
     if (argc != 2) {
-        printf("Parameter: <Server Port>");
+        printf("Parameter: <Proxy Server Port>");
+        printf("Parameter: <Admin Server Port>");
         return 1;
     }
 
-    unsigned port = atoi(argv[1]);
+    unsigned proxy_port = atoi(argv[1]);
+    unsigned admin_port = atoi(argv[2]);
 
     // no tenemos nada que leer de stdin
     close(0);
 
     logger_init();
-    log_debug("hola");
-
-    const char *err_msg = NULL;
-    selector_status ss = SELECTOR_SUCCESS;
-    fd_selector selector = NULL;
-
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    addr.sin_port = htons(port);
-
-    const int server = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (server < 0) {
-        err_msg = "unable to create socket";
-        goto finally;
-    }
-
-    fprintf(stdout, "Listening on TCP port %d\n", port);
-
-    // man 7 ip. no importa reportar nada si falla.
-    setsockopt(server, SOL_SOCKET, SO_REUSEADDR, &(int) {1}, sizeof(int));
-
-    if (bind(server, (struct sockaddr *) &addr, sizeof(addr)) < 0) {
-        err_msg = "unable to bind socket";
-        goto finally;
-    }
-
-    if (listen(server, 1) < 0) {
-        err_msg = "unable to listen";
-        goto finally;
-    }
 
     // registrar sigterm es útil para terminar el programa normalmente.
     // esto ayuda mucho en herramientas como valgrind.
@@ -75,10 +64,6 @@ main(const int argc, const char **argv) {
     signal(SIGINT, sigterm_handler);
     signal(SIGPIPE, SIG_IGN); // ignoro los SIGPIPE de esta manera ya que mac no soporta MSG_NOSIGNAL
 
-    if (selector_fd_set_nio(server) == -1) {
-        err_msg = "getting server socket flags";
-        goto finally;
-    }
     const struct selector_init conf = {
             .signal = SIGALRM,
             .select_timeout = {
@@ -86,6 +71,7 @@ main(const int argc, const char **argv) {
                     .tv_nsec = 0,
             },
     };
+
     if (0 != selector_init(&conf)) {
         err_msg = "initializing selector";
         goto finally;
@@ -96,17 +82,14 @@ main(const int argc, const char **argv) {
         err_msg = "unable to create selector";
         goto finally;
     }
-    const struct fd_handler proxyv5 = {
-            .handle_read       = proxyv5_passive_accept,
-            .handle_write      = NULL,
-            .handle_close      = NULL, // nada que liberar
-    };
-    ss = selector_register(selector, server, &proxyv5,
-                           OP_READ, NULL);
-    if (ss != SELECTOR_SUCCESS) {
-        err_msg = "registering fd";
+
+    int proxy_server = server_init(proxy_port, IPPROTO_TCP, &proxyv5);
+    int admin_server = server_init(admin_port, IPPROTO_SCTP, &admin_handler);
+
+    if (proxy_server  == -1|| admin_server == -1) {
         goto finally;
     }
+
     for (; !done;) {
         err_msg = NULL;
         ss = selector_select(selector);
@@ -115,6 +98,7 @@ main(const int argc, const char **argv) {
             goto finally;
         }
     }
+
     if (err_msg == NULL) {
         err_msg = "closing";
     }
@@ -138,8 +122,49 @@ main(const int argc, const char **argv) {
 
     proxyv5_pool_destroy();
 
-    if (server >= 0) {
-        close(server);
+    if (proxy_server >= 0) {
+        close(proxy_server);
     }
     return ret;
+}
+
+
+int server_init(int port, int protocol, const struct fd_handler * handler) {
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    addr.sin_port = htons(port);
+
+    const int server = socket(AF_INET, SOCK_STREAM, protocol);
+
+    if (server < 0) {
+        err_msg = "unable to create socket";
+        return -1;
+    }
+
+    setsockopt(server, SOL_SOCKET, SO_REUSEADDR, &(int) {1}, sizeof(int));
+
+    if (bind(server, (struct sockaddr *) &addr, sizeof(addr)) < 0) {
+        err_msg = "unable to bind socket";
+        return -1;
+    }
+
+    if (listen(server, 1) < 0) {
+        err_msg = "unable to listen";
+        return -1;
+    }
+
+    if (selector_fd_set_nio(server) == -1) {
+        err_msg = "getting server socket flags";
+        return -1;
+    }
+
+    ss = selector_register(selector, server, handler,
+                           OP_READ, NULL);
+    if (ss != SELECTOR_SUCCESS) {
+        err_msg = "registering fd";
+        return -1;
+    }
+    return  server;
 }
