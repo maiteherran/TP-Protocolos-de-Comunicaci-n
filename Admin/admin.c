@@ -22,9 +22,18 @@
 #define CMD_AUTH_NARGS 0X02
 #define CMD_CLOSE_NARGS 0X00
 #define CMD_GET_MIN_NARGS 0X01
-#define CMD_SET_MIN_ARGS 0X01
+#define CMD_SET_MIN_NARGS 0X01
 #define VERSION_SIZE 0x02
-#define VERSION
+
+
+#define CONFIGURATIONS 0x00
+#define METRICS 0x01
+#define TRANSFORMATION_PROGRAM 0x01
+#define TRANSFORMATION_PROGRAM_STATUS 0x02
+#define MEDIA_TYPES 0x04
+#define CONCURRENT_CONNECTIONS 0x01
+#define HISTORIC_ACCESSES 0x02
+#define TRANSFERRED_BYTES 0X04
 
 /** maquina de estados general */
 enum socks_v5state {
@@ -469,37 +478,139 @@ cmd_read(struct selector_key *key) {
     return ret;
 }
 
-/** procesamiento del mensaje `hello' */
 static unsigned
-cmd_process(struct hpcp_request *request) { // recivo error y proceso la respuesta
+cmd_process(struct hpcp_request *request) { // recibo error y proceso la respuesta
     struct buffer *buff = &ATTACHMENT(key)->write_buffer;
     switch (request->cmd) {
         case hpcp_request_cmd_close:
-            if (request->nargs != CMD_CLOSE_NARGS) {
-                printf("invalid close args\n");
-                return ERROR;
-            }
-            break;
+            return cmd_close_process(request);
         case hpcp_request_cmd_get:
-            if (request->nargs < CMD_GET_MIN_NARGS) {
-                printf("invalid get args\n");
-                return ERROR;
-            }
-            if (request->args_sizes[0] != 0x01 || request->args[0][0] > 0x01) {
-                return ERROR;
-            }
-            break;
+            return cmd_get_process(request);
         case hpcp_request_cmd_set:
-            if (request->nargs < CMD_SET_MIN_ARGS) {
-                printf("e\n");
-                return ERROR;
-            }
-            break;
+            return cmd_set_process(request);
         default:
             return ERROR;
     }
+}
+
+static unsigned cmd_close_process(struct hpcp_request *request) {
+    if (request->nargs != CMD_CLOSE_NARGS) {
+        return ERROR;
+    }
     return COMAND_WRITE;
 }
+
+static unsigned cmd_get_process(struct hpcp_request *request) {
+    //el primer argumento es de un byte y diferencia entre get configurations y get metrics
+    if (request->nargs < CMD_GET_MIN_NARGS || request->args_sizes[0] != 0x01) {
+        return ERROR;
+    }
+    switch (request->args[0][0]) {
+        case CONFIGURATIONS:
+            return cmd_get_configurations_process(request);
+        case METRICS:
+            return cmd_get_metrics_process(request);
+        default:
+            return ERROR;
+    }
+}
+
+static unsigned cmd_get_configurations_process(struct hpcp_request *request) {
+    if (request->nargs != 0x02 || request->args_sizes[1] != 0x01) {
+        return ERROR;
+    }
+    switch (request->args[1][0]) {
+        case TRANSFORMATION_PROGRAM:
+            return get_transformation_program(request);
+        case TRANSFORMATION_PROGRAM_STATUS:
+            return get_transformation_program_status(request);
+        case MEDIA_TYPES:
+            return get_media_types(request);
+        default:
+            return ERROR;
+    }
+}
+
+static unsigned get_transformation_program(struct hpcp_request *request) {
+    return COMAND_WRITE;
+}
+
+static unsigned get_transformation_program_status(struct hpcp_request *request) {
+    return COMAND_WRITE;
+}
+
+static unsigned get_media_types(struct hpcp_request *request) {
+    return COMAND_WRITE;
+}
+
+static unsigned cmd_get_metrics_process(struct hpcp_request *request) {
+    if (request->nargs != 0x02 || request->args_sizes[1] != 0x01) {
+        return ERROR;
+    }
+    switch (request->args[1][0]) {
+        case CONCURRENT_CONNECTIONS:
+            return get_concurrent_connections(request);
+        case HISTORIC_ACCESSES:
+            return get_historic_accesses(request);
+        case TRANSFERRED_BYTES:
+            return get_transferred_bytes(request);
+        default:
+            return ERROR;
+    }
+}
+
+static unsigned get_concurrent_connections(struct hpcp_request *request) {
+    return COMAND_WRITE;
+}
+
+static unsigned get_historic_accesses(struct hpcp_request *request) {
+    return COMAND_WRITE;
+}
+
+static unsigned get_transferred_bytes(struct hpcp_request *request) {
+    return COMAND_WRITE;
+}
+
+static unsigned cmd_set_process(struct hpcp_request *request) {
+    if (request->nargs < CMD_SET_MIN_NARGS || request->args_sizes[0] != 0x01) {
+        return ERROR;
+    }
+    switch (request->args[0][0]) {
+        case CONFIGURATIONS:
+            return cmd_set_configurations_process(request);
+        default:
+            return ERROR;
+    }
+}
+
+static unsigned cmd_set_configurations_process(struct hpcp_request *request) {
+    if (request->args_sizes[1] != 0x01) {
+        return ERROR;
+    }
+    switch (request->args[1][0]) {
+        case TRANSFORMATION_PROGRAM:
+            return set_transformation_program(request);
+        case TRANSFORMATION_PROGRAM_STATUS:
+            return set_transformation_program_status(request);
+        case MEDIA_TYPES:
+            return set_media_types(request);
+        default:
+            return ERROR;
+    }
+}
+
+static unsigned set_transformation_program(struct hpcp_request *request) {
+    return COMAND_WRITE;
+}
+
+static unsigned set_transformation_program_status(struct hpcp_request *request) {
+    return COMAND_WRITE;
+}
+
+static unsigned set_media_types(struct hpcp_request *request) {
+    return COMAND_WRITE;
+}
+
 
 ////////////////////////////////////////////////////////////////////////////////
 // CMD_WRITE
