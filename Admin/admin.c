@@ -14,6 +14,7 @@
 #include "../Utils/buffer.h"
 #include "../Utils/stm.h"
 #include "HpcpParser/hpcpRequest.h"
+#include "../Utils/log.h"
 
 #define N(x) (sizeof(x)/sizeof((x)[0]))
 #define MSG_NOSIGNAL       0x4000
@@ -66,7 +67,7 @@ struct request_st {
     struct hpcp_request_parser *hpcp_parser;
 
     /*Request que está siendo parseado*/
-    struct hpcp_request *request;
+    struct hpcp_request request;
     enum hpcp_response_status;
 
     const int *client_fd;
@@ -152,8 +153,10 @@ socks5_new(int client_fd) {
     buffer_init(&ret->read_buffer, N(ret->raw_buff_a), ret->raw_buff_a);
     buffer_init(&ret->write_buffer, N(ret->raw_buff_b), ret->raw_buff_b);
 
+    //ret->hpcp_parser.request = malloc(sizeof(struct hpcp_request));
+
     ret->request.client_fd   = &ret->client_fd;
-    ret->request.request     = ret->hpcp_parser.request;
+    ret->hpcp_parser.request = &ret->request.request;
     ret->request.hpcp_parser = &ret->hpcp_parser;
     ret->request.rb          = &ret->read_buffer;
     ret->request.wb          = &ret->write_buffer;
@@ -166,7 +169,7 @@ socks5_new(int client_fd) {
 /** realmente destruye */
 static void
 socks5_destroy_(struct hpcp *s) {
-    free_hpcp_request(s->request.request);
+    free_hpcp_request(&s->request.request);
     free(s);
 }
 
@@ -261,18 +264,24 @@ socksv5_passive_accept(struct selector_key *key) {
     socks5_destroy(state);
 }
 
+static void
+on_read_departure(const unsigned state, struct selector_key *key) {
+    struct request_st *r = &ATTACHMENT(key)->request;
+//    free_hpcp_request(r->request);
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // HELLO_READ
 ////////////////////////////////////////////////////////////////////////////////
 
 static unsigned
-hello_process(struct hpcp_request *request);
+hello_process(struct selector_key *key, struct request_st *r);
 
 /** inicializa las variables de los estados HELLO_… */
 static void
 hello_read_init(const unsigned state, struct selector_key *key) {
     struct request_st *r = &ATTACHMENT(key)->request;
-    r->hpcp_parser->state = hpcp_request_cmd;
+    r->hpcp_parser->state   = hpcp_request_cmd;
 }
 
 /** lee todos los bytes del mensaje de tipo `hello' y inicia su proceso */
@@ -294,9 +303,10 @@ hello_read(struct selector_key *key) {
     ptr = buffer_write_ptr(buff, &count);
     n   = read(*r->client_fd, ptr, count);
     if (n > 0) {
+        buffer_write_adv(buff, n);
         st = hpcp_request_consume(buff, r->hpcp_parser, &error);
         if (hpcp_request_is_done(st, &error)) {
-            ret = hello_process(r->request);
+            ret = hello_process(key, r);
         }
     } else {
         ret = ERROR;
@@ -306,19 +316,19 @@ hello_read(struct selector_key *key) {
 
 /** procesamiento del mensaje `hello' */
 static unsigned
-hello_process(struct hpcp_request *request) { // recivo error y proceso la respuesta
-    struct buffer *buff = &ATTACHMENT(key)->write_buffer;
+hello_process(struct selector_key *key, struct request_st *r) { // recivo error y proceso la respuesta
+    struct buffer *buff = r->wb;
+    struct hpcp_request *request = &r->request;
     if (request->nargs != CMD_HELLO_NARGS || request->args_sizes[0] != VERSION_SIZE) {
         printf("invalid hello args\n");
         return ERROR;
     }
-    if (request->args[0][0] != 0x01 || request->args[0][1] != 0x00) {
-        printf("invalid version\n");
-        return ERROR;
-    }
+//    if (request->args[0][0] != 0x01 || request->args[0][1] != 0x00) {
+//        printf("invalid version\n");
+//        return ERROR;
+//    }
     buffer_write(buff, hpcp_status_ok);
     buffer_write(buff, 0x00);
-    free_hpcp_request(request);
     selector_set_interest_key(key, OP_WRITE);
     return HELLO_WRITE;
 }
@@ -357,7 +367,7 @@ hello_write(struct selector_key *key) {
 ////////////////////////////////////////////////////////////////////////////////
 
 static unsigned
-auth_process(struct hpcp_request *request);
+auth_process(struct selector_key *key, struct request_st *r);
 
 /** inicializa las variables de los estados HELLO_… */
 static void
@@ -370,7 +380,7 @@ auth_read_init(const unsigned state, struct selector_key *key) {
 static unsigned
 auth_read(struct selector_key *key) {
     struct request_st       *r    = &ATTACHMENT(key)->request;
-    unsigned                ret   = HELLO_READ;
+    unsigned                ret   = AUTH_READ;
     bool                    error = false;
     struct buffer           *buff = r->rb;
     enum hpcp_request_state st;
@@ -385,9 +395,10 @@ auth_read(struct selector_key *key) {
     ptr = buffer_write_ptr(buff, &count);
     n   = read(*r->client_fd, ptr, count);
     if (n > 0) {
+        buffer_write_adv(buff, n);
         st = hpcp_request_consume(buff, r->hpcp_parser, &error);
         if (hpcp_request_is_done(st, &error)) {
-            ret = auth_process(r->request);
+            ret = auth_process(key, r);
         }
     } else {
         ret = ERROR;
@@ -397,17 +408,17 @@ auth_read(struct selector_key *key) {
 
 /** procesamiento del mensaje `hello' */
 static unsigned
-auth_process(struct hpcp_request *request) { // recivo error y proceso la respuesta
-    struct buffer *buff = &ATTACHMENT(key)->write_buffer;
+auth_process(struct selector_key *key, struct request_st *r) { // recivo error y proceso la respuesta
+    struct buffer *buff = r->wb;
+    struct hpcp_request *request = &r->request;
     if (request->nargs != CMD_AUTH_NARGS) {
         printf("invalid hello args\n");
         return hpcp_request_error_invalid_args;
     }
     buffer_write(buff, hpcp_status_ok);
     buffer_write(buff, 0x00);
-    free_hpcp_request(request);
     selector_set_interest_key(key, OP_WRITE);
-    return HELLO_WRITE;
+    return AUTH_WRITE;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -419,7 +430,7 @@ static unsigned
 auth_write(struct selector_key *key) {
     int           client_fd = ATTACHMENT(key)->client_fd;
     struct buffer *buff     = &ATTACHMENT(key)->write_buffer;
-    unsigned      ret       = AUTH_READ;
+    unsigned      ret       = COMAND_READ;
     uint8_t       *ptr;
     size_t        count;
     ssize_t       n;
@@ -444,7 +455,7 @@ auth_write(struct selector_key *key) {
 ////////////////////////////////////////////////////////////////////////////////
 
 static unsigned
-cmd_process(struct hpcp_request *request);
+cmd_process(struct selector_key *key, struct request_st *request);
 
 /** inicializa las variables de los estados HELLO_… */
 static void
@@ -457,7 +468,7 @@ cmd_read_init(const unsigned state, struct selector_key *key) {
 static unsigned
 cmd_read(struct selector_key *key) {
     struct request_st       *r    = &ATTACHMENT(key)->request;
-    unsigned                ret   = HELLO_READ;
+    unsigned                ret   = COMAND_READ;
     bool                    error = false;
     struct buffer           *buff = r->rb;
     enum hpcp_request_state st;
@@ -472,9 +483,10 @@ cmd_read(struct selector_key *key) {
     ptr = buffer_write_ptr(buff, &count);
     n   = read(*r->client_fd, ptr, count);
     if (n > 0) {
+        buffer_write_adv(buff, n);
         st = hpcp_request_consume(buff, r->hpcp_parser, &error);
         if (hpcp_request_is_done(st, &error)) {
-            ret = cmd_process(r->request);
+            ret = cmd_process(key, r);
         }
     } else {
         ret = ERROR;
@@ -483,8 +495,9 @@ cmd_read(struct selector_key *key) {
 }
 
 static unsigned
-cmd_process(struct hpcp_request *request) { // recibo error y proceso la respuesta
-    struct buffer *buff = &ATTACHMENT(key)->write_buffer;
+cmd_process(struct selector_key *key, struct request_st *r) { // recibo error y proceso la respuesta
+    struct buffer *buff = r->wb;
+    struct hpcp_request *request = &r->request;
     switch (request->cmd) {
         case hpcp_request_cmd_close:
             return cmd_close_process(request);
@@ -697,6 +710,7 @@ static const struct state_definition client_statbl[] = {
                 .state            = HELLO_READ,
                 .on_arrival       = hello_read_init,
                 .on_read_ready    = hello_read,
+                .on_departure     = on_read_departure,
         },
         {
                 .state            = HELLO_WRITE,
@@ -706,6 +720,7 @@ static const struct state_definition client_statbl[] = {
                 .state            = AUTH_READ,
                 .on_arrival       = auth_read_init,
                 .on_read_ready    = auth_read,
+                .on_departure     = on_read_departure,
         },
         {
                 .state            = AUTH_WRITE,
@@ -715,6 +730,7 @@ static const struct state_definition client_statbl[] = {
                 .state            = COMAND_READ,
                 .on_arrival       = cmd_read_init,
                 .on_read_ready    = cmd_read,
+                .on_departure     = on_read_departure,
         },
         {
                 .state            = COMAND_WRITE,

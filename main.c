@@ -51,7 +51,7 @@ main(const int argc, const char **argv) {
     }
 
     unsigned proxy_port = atoi(argv[1]);
-    unsigned admin_port = atoi(argv[2]);
+    //unsigned admin_port = atoi(argv[2]);
 
     // no tenemos nada que leer de stdin
     close(0);
@@ -83,8 +83,8 @@ main(const int argc, const char **argv) {
         goto finally;
     }
 
-    int proxy_server = server_init(proxy_port, IPPROTO_TCP, &proxyv5);
-    int admin_server = server_init(admin_port, IPPROTO_SCTP, &admin_handler);
+    int proxy_server = 0;//server_init(proxy_port, IPPROTO_TCP, &proxyv5);
+    int admin_server = server_init(proxy_port, IPPROTO_TCP, &admin_handler);
 
     if (proxy_server  == -1|| admin_server == -1) {
         goto finally;
