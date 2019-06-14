@@ -281,7 +281,7 @@ proxy5_new(int client_fd) {
     buffer_init(&ret->write_buffer, N(ret->raw_buff_b), ret->raw_buff_b);
     buffer_compact(&ret->read_buffer, 0);
 
-    ret->transformation_on = 0;
+    ret->transformation_on = 1;
     ret->chunked_set       = 0;
 
     ret->references = 1;
@@ -1099,7 +1099,7 @@ transform_init(const unsigned state, struct selector_key *key) {
         close(outfd[0]); // cierro lectura en out
         close(STDERR_FILENO);
 
-        execl("/bin/sh", "sh", "-c", "cat > /tmp/foo && cat /tmp/foo", (char *) 0);
+        execl("/bin/sh", "sh", "-c", "cat", (char *) 0);
     } else {
         r->slavePid = pid;
 
@@ -1151,6 +1151,7 @@ transform_write(struct selector_key *key) {
 
     if (!buffer_can_read(buff)) {
         if (r->transform_done) {
+            dprintf(*r->client_fd, "\r\n%x\r\n\r\n", 0);
             return DONE;
         }
         return TRANSFORM;
