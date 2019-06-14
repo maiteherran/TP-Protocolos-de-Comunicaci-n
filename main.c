@@ -12,7 +12,7 @@
 #include <netinet/tcp.h>
 
 #include "Utils/selector.h"
-#include "proxy5nio.h"
+#include "Proxy/proxy5nio.h"
 #include "Utils/log.h"
 
 static bool done = false;

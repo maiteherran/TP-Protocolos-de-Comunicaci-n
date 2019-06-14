@@ -11,12 +11,12 @@
 #include <arpa/inet.h>
 #include <sys/ioctl.h>
 #include <signal.h>
-#include "Utils/buffer.h"
-#include "Utils/stm.h"
-#include "Parser/http_chunk_decoder.h"
+#include "../Utils/buffer.h"
+#include "../Utils/stm.h"
+#include "../Parser/http_chunk_decoder.h"
 #include "proxy5nio.h"
 #include "proxy_reporter.h"
-#include "Utils/log.h"
+#include "../Utils/log.h"
 
 #define N(x) (sizeof(x)/sizeof((x)[0]))
 #define BUFFER_SIZE 4096
