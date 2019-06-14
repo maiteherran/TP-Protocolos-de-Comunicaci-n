@@ -41,6 +41,8 @@ enum socks_v5state {
 
     COMAND_WRITE,
 
+    REQUEST_ERROR,
+
     ERROR,
 };
 
@@ -84,6 +86,8 @@ struct hpcp {
 
     /** maquinas de estados */
     struct state_machine stm;
+
+    enum socks_v5state state_before_error;
 
     /** buffers para ser usados read_buffer, write_buffer.*/
     uint8_t raw_buff_a[2048], raw_buff_b[2048];
@@ -530,6 +534,42 @@ cmd_write(struct selector_key *key) {
     return ret;
 }
 
+////////////////////////////////////////////////////////////////////////////////
+// REQUEST_ERROR
+////////////////////////////////////////////////////////////////////////////////
+
+static unsigned
+request_error_write(struct selector_key *key) {
+    int                client_fd = ATTACHMENT(key)->client_fd;
+    struct buffer      *buff     = &ATTACHMENT(key)->write_buffer;
+    enum socks_v5state ret       = ATTACHMENT(key)->state_before_error;
+    uint8_t            *ptr;
+    size_t             count;
+    ssize_t            n;
+
+    if (!buffer_can_read(buff)) {
+        return ERROR;
+    }
+
+    ptr = buffer_read_ptr(buff, &count);
+    n   = write(client_fd, ptr, count);
+    if (n > 0) {
+        buffer_read_adv(buff, n);
+        selector_set_interest_key(key, OP_READ);
+    } else {
+        ret = ERROR;
+    }
+    return ret;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// CLOSE
+////////////////////////////////////////////////////////////////////////////////
+
+void
+cmd_close() {
+
+}
 
 /** definición de handlers para cada estado */
 static const struct state_definition client_statbl[] = {
@@ -559,6 +599,10 @@ static const struct state_definition client_statbl[] = {
         {
                 .state            = COMAND_WRITE,
                 .on_write_ready   = cmd_write,
+        },
+        {
+                .state            = REQUEST_ERROR,
+                .on_write_ready   = request_error_write,
         },
         {
                 .state            = ERROR,
