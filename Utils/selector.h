@@ -98,9 +98,9 @@ selector_destroy(fd_selector s);
  * OP_NOOP es útil para cuando no se tiene ningún interés.
  */
 typedef enum {
-    OP_NOOP    = 0,
-    OP_READ    = 1 << 0,
-    OP_WRITE   = 1 << 2,
+    OP_NOOP    = 0,         //000 = 0
+    OP_READ    = 1 << 0,   // 001 = 1
+    OP_WRITE   = 1 << 2,   // 100 = 4
 } fd_interest ;
 
 /**

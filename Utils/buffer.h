@@ -94,6 +94,9 @@ struct buffer {
 
     /** puntero de escritura */
     uint8_t *write;
+
+    /** indica si hay compactacion o no*/
+    int compact;
 };
 
 /**
@@ -101,6 +104,9 @@ struct buffer {
  */
 void
 buffer_init(buffer *b, const size_t n, uint8_t *data);
+
+void
+buffer_compact(buffer *b, int on_off);
 
 /**
  * Retorna un puntero donde se pueden escribir hasta `*nbytes`.
@@ -130,13 +136,16 @@ buffer_write(buffer *b, uint8_t c);
  * compacta el buffer
  */
 void
-buffer_compact(buffer *b);
+do_buffer_compact(buffer *b);
 
 /**
  * Reinicia todos los punteros
  */
 void
 buffer_reset(buffer *b);
+
+void
+buffer_reset_read(buffer *b);
 
 /** retorna true si hay bytes para leer del buffer */
 bool

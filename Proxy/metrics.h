@@ -14,7 +14,7 @@ typedef struct {
 
 } metrics;
 
+metrics proxy_metrics;
 
-unsigned long long
 
 #endif //PROBANDOTPPROTOS_METRICS_H

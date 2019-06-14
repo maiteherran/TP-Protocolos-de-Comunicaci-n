@@ -10,17 +10,27 @@
 
 inline void
 buffer_reset(buffer *b) {
-    b->read = b->data;
+    b->read  = b->data;
     b->write = b->data;
+}
+
+inline void
+buffer_reset_read(buffer *b) {
+    b->read  = b->data;
+}
+
+void
+buffer_compact(buffer *b, int on_off) {
+    b->compact = on_off;
 }
 
 void
 buffer_init(buffer *b, const size_t n, uint8_t *data) {
-    b->data = data;
+    b->compact = 1;
+    b->data    = data;
     buffer_reset(b);
     b->limit = b->data + n;
 }
-
 
 inline bool
 buffer_can_write(buffer *b) {
@@ -62,7 +72,9 @@ buffer_read_adv(buffer *b, const ssize_t bytes) {
 
         if (b->read == b->write) {
             // compactacion poco costosa
-            buffer_compact(b);
+            if (b->compact) {
+                do_buffer_compact(b);
+            }
         }
     }
 }
@@ -88,16 +100,16 @@ buffer_write(buffer *b, uint8_t c) {
 }
 
 void
-buffer_compact(buffer *b) {
+do_buffer_compact(buffer *b) {
     if (b->data == b->read) {
         // nada por hacer
     } else if (b->read == b->write) {
-        b->read = b->data;
+        b->read  = b->data;
         b->write = b->data;
     } else {
         const size_t n = b->write - b->read;
         memmove(b->data, b->read, n);
-        b->read = b->data;
+        b->read  = b->data;
         b->write = b->data + n;
     }
 }
