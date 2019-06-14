@@ -604,6 +604,7 @@ static unsigned cmd_set_configurations_process(struct hpcp_request *request) {
 }
 
 static unsigned set_transformation_program(struct hpcp_request *request) {
+
     return COMAND_WRITE;
 }
 
