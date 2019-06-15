@@ -17,6 +17,7 @@
 #include "proxy5nio.h"
 #include "proxy_reporter.h"
 #include "Utils/log.h"
+#include "Utils/netutils.h"
 
 #define N(x) (sizeof(x)/sizeof((x)[0]))
 #define BUFFER_SIZE 4096
@@ -27,6 +28,7 @@
 //logear
 //metricas
 //header accept
+//accesos
 // escuchar las 2 bocas y poner un timer en el selector de 90s si nadie me mando nada cierro
 // cat | gzip -d | cat
 
@@ -235,6 +237,9 @@ static const unsigned max_pool  = 50; // tamaño máximo
 static unsigned       pool_size = 0;  // tamaño actual
 static struct proxy5  *pool     = 0;  // pool propiamente dicho
 
+void
+log_acces_wrapper(char * request, char * response);
+
 static const struct state_definition *
 proxy5_client_describe_states(void);
 
@@ -339,11 +344,14 @@ static void proxyv5_block(struct selector_key *key);
 
 static void proxyv5_close(struct selector_key *key);
 
+static void proxyv5_done(struct selector_key *key);
+
 static const struct fd_handler proxy5_handler = {
-        .handle_read   = proxyv5_read,
-        .handle_write  = proxyv5_write,
-        .handle_close  = proxyv5_close,
-        .handle_block  = proxyv5_block,
+        .handle_read    = proxyv5_read,
+        .handle_write   = proxyv5_write,
+        .handle_close   = proxyv5_close,
+        .handle_block   = proxyv5_block,
+        .handle_timeout = proxyv5_done,
 };
 
 /** Intenta aceptar la nueva conexión entrante*/
@@ -1147,6 +1155,7 @@ transform_write(struct selector_key *key) {
 
     if (!buffer_can_read(buff)) {
         if (r->transform_done) {
+            dprintf(*r->client_fd, "\r\n%x\r\n\r\n", 0);
             return DONE;
         }
         return TRANSFORM;
@@ -1334,4 +1343,12 @@ proxyv5_done(struct selector_key *key) {
             close(fds[i]);
         }
     }
+}
+
+void
+log_acces_wrapper(char * request, char * response) {
+    const struct sockaddr *addr = (struct sockaddr *)&ATTACHMENT(key)->client_addr;
+    char buff[256];
+    sockaddr_to_human(buff, 256, addr);
+    log_acces("%s - \"%s\" - \"%s\"", buff, request, response);
 }

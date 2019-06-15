@@ -100,6 +100,7 @@ main(const int argc, const char **argv) {
             .handle_read       = proxyv5_passive_accept,
             .handle_write      = NULL,
             .handle_close      = NULL, // nada que liberar
+            .handle_timeout    = NULL,
     };
     ss = selector_register(selector, server, &proxyv5,
                            OP_READ, NULL);
