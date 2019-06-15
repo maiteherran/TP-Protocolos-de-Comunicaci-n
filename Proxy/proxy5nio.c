@@ -31,6 +31,7 @@
 //logear
 //metricas
 //header accept
+//accesos
 // escuchar las 2 bocas y poner un timer en el selector de 90s si nadie me mando nada cierro
 // cat | gzip -d | cat
 
@@ -61,7 +62,7 @@ enum proxy_v5state {
      * REQUEST_WRITE para enviar el request http del cliente al origin server
      * REQUEST_RESOLV si no nos pudimos conectar volvemos al estado REQUEST_RESOLV buscando pidiendo otra resolucion dns
      */
-            CONNECTING,
+//            CONNECTING,
     /*
      *
      *
@@ -101,6 +102,7 @@ enum proxy_v5state {
 };
 
 enum proxy_v5_origin_state {
+    CONNECTING,
     /*
      *
      *
@@ -239,6 +241,9 @@ static const unsigned max_pool  = 50; // tamaño máximo
 static unsigned       pool_size = 0;  // tamaño actual
 static struct proxy5  *pool     = 0;  // pool propiamente dicho
 
+void
+log_acces_wrapper(char *request, char *response);
+
 static const struct state_definition *
 proxy5_client_describe_states(void);
 
@@ -271,7 +276,7 @@ proxy5_new(int client_fd) {
     ret->client_stm.states    = proxy5_client_describe_states();
     stm_init(&ret->client_stm);
 
-    ret->origin_stm.initial   = O_COMUNICATE;
+    ret->origin_stm.initial   = CONNECTING;
     ret->origin_stm.max_state = O_ERROR;
     ret->origin_stm.states    = proxy5_origin_describe_states();
     stm_init(&ret->origin_stm);
@@ -343,11 +348,14 @@ static void proxyv5_block(struct selector_key *key);
 
 static void proxyv5_close(struct selector_key *key);
 
+static void proxyv5_done(struct selector_key *key);
+
 static const struct fd_handler proxy5_handler = {
-        .handle_read   = proxyv5_read,
-        .handle_write  = proxyv5_write,
-        .handle_close  = proxyv5_close,
-        .handle_block  = proxyv5_block,
+        .handle_read    = proxyv5_read,
+        .handle_write   = proxyv5_write,
+        .handle_close   = proxyv5_close,
+        .handle_block   = proxyv5_block,
+        .handle_timeout = proxyv5_done,
 };
 
 /** Intenta aceptar la nueva conexión entrante*/
@@ -524,7 +532,7 @@ request_resolv_done(struct selector_key *key) {
             return ret;
         }
     }
-      report(key->fd, REPORT_503);
+    report(s->client_fd, REPORT_503);
     freeaddrinfo(s->origin_resolution);
     s->origin_resolution = 0;
     return ret;
@@ -548,7 +556,7 @@ request_connect(struct selector_key *key, struct request_st *d) {
             // es esperable,  tenemos que esperar a la conexión
 
             // dejamos de de pollear el socket del cliente
-            selector_status st = selector_set_interest_key(key, OP_NOOP);
+            selector_status st = selector_set_interest(key->s, s->client_fd, OP_NOOP);
             if (SELECTOR_SUCCESS != st) {
                 error = true;
                 goto finally;
@@ -556,8 +564,9 @@ request_connect(struct selector_key *key, struct request_st *d) {
 
             // esperamos la conexion en el nuevo socket
             // polleamos el socket del origin server
-            st = selector_register(key->s, *fd, &proxy5_handler, OP_WRITE | OP_READ,
-                                   key->data); // escritura del request
+            // SOLO escritura
+            st = selector_register(key->s, *fd, &proxy5_handler, OP_WRITE,
+                                   key->data);
             if (SELECTOR_SUCCESS != st) {
                 error = true;
                 goto finally;
@@ -582,7 +591,7 @@ request_connect(struct selector_key *key, struct request_st *d) {
         report(key->fd, REPORT_500);
         return ERROR;
     }
-    selector_set_interest_key(key, OP_READ | OP_WRITE); // lectura del request
+//    selector_set_interest_key(key, OP_READ | OP_WRITE); // lectura del request
     return C_COMUNICATE;
 //    return CONNECTING;
 }
@@ -593,6 +602,11 @@ request_connect(struct selector_key *key, struct request_st *d) {
 ////////////////////////////////////////////////////////////////////////////////
 
 /** la conexión ha sido establecida (o falló)  */
+/*
+ *    SO_ERROR returns any pending error on the socket and clears the error
+ *    status.  It may be used to check for asynchronous errors on connected
+ *    datagram sockets or for other asynchronous errors.
+ */
 static unsigned
 connecting(struct selector_key *key) {
     int               error;
@@ -601,25 +615,31 @@ connecting(struct selector_key *key) {
     struct proxy5     *p  = ATTACHMENT(key);
 
     if (getsockopt(key->fd, SOL_SOCKET, SO_ERROR, &error, &len) < 0) {
-        p->origin_resolution = p->origin_resolution->ai_next;
-        return REQUEST_RESOLV; // pasasmos a buscar otra resolucion dns
+        //TODO: no entendi bien este caso
+//        p->origin_resolution = p->origin_resolution->ai_next;
+//        return REQUEST_RESOLV; // pasasmos a buscar otra resolucion dns
+        return O_ERROR;
     } else {
         if (error == 0) {
             selector_set_interest(key->s, *d->client_fd,
-                                  OP_READ); // habiamos dejado de pollear al cliente, como nos conectamos pedimos lectura para ver si quedaba algo para leer
+                                  OP_READ | OP_WRITE); // habiamos dejado de pollear al cliente, como nos conectamos pedimos lectura para ver si quedaba algo para leer
             *d->origin_fd = key->fd;
-            return C_COMUNICATE;//REQUEST_WRITE;
+            selector_set_interest(key->s, *d->origin_fd,
+                                  OP_READ | OP_WRITE);
+            return O_COMUNICATE;//REQUEST_WRITE;
         } else { // la conexion no pude ser establecida, desregistramos el fd y cerramos
-            if (p->origin_resolution->ai_next != NULL) {
-                selector_unregister_fd(key->s, key->fd);
-                close(key->fd);
-                p->origin_resolution = p->origin_resolution->ai_next;
+//            selector_unregister_fd(key->s, key->fd);
+            /*
+             * el select se encarga de desregistrar fd's cerrados no desregistrados, si lo desregistro va a saltar un
+             * error al desregistrarlo "otra vez" en el metodo proxy_done
+             */
+            close(key->fd);
+            p->origin_resolution = p->origin_resolution->ai_next;
+            if (request_resolv_done(key) == ERROR) {
+                return O_ERROR;
             } else {
-                report(*d->client_fd, REPORT_500);
-                return ERROR;
+                return CONNECTING;
             }
-            return request_resolv_done(key); // pasamos a buscar otra resolucion dsn
-            //TODO: la puedo llamar o es mejor retornar el estado?
         }
     }
 }
@@ -1206,10 +1226,10 @@ static const struct state_definition client_statbl[] = {
                 .state            = REQUEST_RESOLV,
                 .on_block_ready   = request_resolv_done,
         },
-        {
-                .state            = CONNECTING,
-                .on_write_ready   = connecting,
-        },
+//        {
+//                .state            = CONNECTING,
+//                .on_write_ready   = connecting,
+//        },
         {
                 .state            = C_COMUNICATE,
                 .on_arrival       = client_comunicate_init,
@@ -1239,6 +1259,10 @@ static const struct state_definition client_statbl[] = {
 };
 
 static const struct state_definition origin_statbl[] = {
+        {
+                .state            = CONNECTING,
+                .on_write_ready   = connecting,
+        },
         {
                 .state            = O_COMUNICATE,
                 .on_arrival       = origin_comunicate_init,
@@ -1339,4 +1363,12 @@ proxyv5_done(struct selector_key *key) {
             close(fds[i]);
         }
     }
+}
+
+void
+log_acces_wrapper(char *request, char *response) {
+    const struct sockaddr *addr = (struct sockaddr *) &ATTACHMENT(key)->client_addr;
+    char                  buff[256];
+    sockaddr_to_human(buff, 256, addr);
+    log_acces("%s - \"%s\" - \"%s\"", buff, request, response);
 }

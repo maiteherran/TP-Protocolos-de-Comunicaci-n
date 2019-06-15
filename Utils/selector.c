@@ -16,6 +16,7 @@
 #include <sys/select.h>
 #include <sys/signal.h>
 #include "selector.h"
+#include "log.h"
 
 #define N(x) (sizeof(x)/sizeof((x)[0]))
 
@@ -106,6 +107,7 @@ struct item {
    fd_interest         interest;
    const fd_handler   *handler;
    void *              data;
+   time_t              timestamp;
 };
 
 /* tarea bloqueante */
@@ -357,10 +359,11 @@ selector_register(fd_selector        s,
         ret = SELECTOR_FDINUSE;
         goto finally;
     } else {
-        item->fd       = fd;
-        item->handler  = handler;
-        item->interest = interest;
-        item->data     = data;
+        item->fd        = fd;
+        item->handler   = handler;
+        item->interest  = interest;
+        item->data      = data;
+        item->timestamp = time(NULL);
 
         // actualizo colaterales
         if(fd > s->max_fd) {
@@ -462,6 +465,7 @@ handle_iteration(fd_selector s) {
                     if(0 == item->handler->handle_read) {
                         assert(("OP_READ arrived but no handler. bug!" == 0));
                     } else {
+                        item->timestamp = time(NULL); //update al timestamp con la ultima vez usado el fd
                         item->handler->handle_read(&key);
                     }
                 }
@@ -471,10 +475,22 @@ handle_iteration(fd_selector s) {
                     if(0 == item->handler->handle_write) {
                         assert(("OP_WRITE arrived but no handler. bug!" == 0));
                     } else {
+                        item->timestamp = time(NULL); //update al timestamp con la ultima vez usado el fd
                         item->handler->handle_write(&key);
                     }
                 }
             }
+//            time_t t = time(NULL);
+//            if (difftime(t, item->timestamp) >= 30) {
+//                /*
+//                 * si no se a registrado actividad en 90 segundos pasamos a liberaramos los recursos utilizados
+//                 * de esto se encarga la funicion registrada en timeout
+//                 */
+//                if (item->handler->handle_timeout != 0) {
+//                    log_warn("Connection in fd: %d has been closed for inactivity", item->fd);
+//                    item->handler->handle_timeout(&key);
+//                }
+//            }
         }
     }
 }
