@@ -11,7 +11,6 @@ typedef struct {
     unsigned long long concurrent_connections;
     unsigned long long historic_accesses;
     unsigned long long transferred_bytes;
-
 } metrics;
 
 metrics proxy_metrics;
