@@ -15,8 +15,17 @@
 #include "Admin/admin.h"
 #include "Proxy/proxy5nio.h"
 #include "Utils/log.h"
+#include "Proxy/metrics.h"
+#include "Proxy/config.h"
+
+extern metrics proxy_metrics;
+extern conf proxy_configurations;
 
 int server_init(int port, int protocol, const struct fd_handler * handler);
+
+void conf_init();
+
+void metrics_init();
 
 static bool done = false;
 
@@ -34,29 +43,33 @@ const struct fd_handler proxyv5 = {
         .handle_read       = proxyv5_passive_accept,
         .handle_write      = NULL,
         .handle_close      = NULL, // nada que liberar
+        .handle_timeout    = NULL
 };
 
 const struct fd_handler admin_handler = {
         .handle_read       = socksv5_passive_accept,
         .handle_write      = NULL,
         .handle_close      = NULL, // nada que liberar
+        .handle_timeout    = NULL,
 };
 
 int
 main(const int argc, const char **argv) {
-    if (argc != 2) {
+    if (argc != 3) {
         printf("Parameter: <Proxy Server Port>");
         printf("Parameter: <Admin Server Port>");
         return 1;
     }
 
     unsigned proxy_port = atoi(argv[1]);
-    //unsigned admin_port = atoi(argv[2]);
+    unsigned admin_port = atoi(argv[2]);
 
     // no tenemos nada que leer de stdin
     close(0);
 
     logger_init();
+    conf_init();
+    metrics_init();
 
     // registrar sigterm es útil para terminar el programa normalmente.
     // esto ayuda mucho en herramientas como valgrind.
@@ -84,7 +97,7 @@ main(const int argc, const char **argv) {
     }
 
     int proxy_server = server_init(proxy_port, IPPROTO_TCP, &proxyv5);
-    int admin_server = 0;//server_init(proxy_port, IPPROTO_TCP, &admin_handler);
+    int admin_server = server_init(admin_port, IPPROTO_TCP, &admin_handler);
 
     if (proxy_server  == -1|| admin_server == -1) {
         goto finally;
@@ -167,4 +180,19 @@ int server_init(int port, int protocol, const struct fd_handler * handler) {
         return -1;
     }
     return  server;
+}
+
+
+void conf_init() {
+    proxy_metrics.transferred_bytes = 0;
+    proxy_metrics.historic_accesses = 0;
+    proxy_metrics.concurrent_connections = 0;
+
+
+}
+void metrics_init() {
+    proxy_configurations.media_types = NULL;
+    proxy_configurations.transformation_on = 0;
+    proxy_configurations.n_media_types = 0;
+    proxy_configurations.transformation_program = NULL;
 }

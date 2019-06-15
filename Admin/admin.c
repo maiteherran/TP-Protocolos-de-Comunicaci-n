@@ -13,10 +13,10 @@
 #include <arpa/inet.h>
 #include "../Utils/buffer.h"
 #include "../Utils/stm.h"
-#include "config.h"
+#include "../Proxy/config.h"
 #include "HpcpParser/hpcpRequest.h"
 #include "../Utils/log.h"
-#include "config.h"
+#include "../Proxy/config.h"
 #include "../Proxy/metrics.h"
 
 #define N(x) (sizeof(x)/sizeof((x)[0]))
@@ -57,6 +57,10 @@ enum socks_v5state {
     COMAND_WRITE,
 
     REQUEST_ERROR,
+
+    CLOSE,
+
+    DONE,
 
     ERROR,
 };
@@ -215,6 +219,11 @@ socksv5_pool_destroy(void) {
 /* declaración forward de los handlers de selección de una conexión
  * establecida entre un cliente y el proxy.
  */
+
+
+void
+cmd_close(int client_fd, struct buffer *buff);
+
 static void socksv5_read(struct selector_key *key);
 
 static void socksv5_write(struct selector_key *key);
@@ -517,24 +526,35 @@ static unsigned
 cmd_process(struct selector_key *key, struct request_st *r) { // recibo error y proceso la respuesta
     struct buffer *buff = r->wb;
     struct hpcp_request *request = &r->request;
+    unsigned int ret;
     switch (request->cmd) {
         case hpcp_request_cmd_close:
-            return cmd_close_process(r);
+            ret = cmd_close_process(r);
+            break;
         case hpcp_request_cmd_get:
-            return cmd_get_process(r);
+            ret = cmd_get_process(r);
+            break;
         case hpcp_request_cmd_set:
-            return cmd_set_process(r);
+            ret = cmd_set_process(r);
+            break;
         default:
-            return ERROR;
+            ret = ERROR;
+            break;
     }
+    selector_set_interest_key(key, OP_WRITE);
+    return ret;
 }
 
 static unsigned cmd_close_process(struct request_st *r) {
+    struct buffer *buff = r->wb;
     struct hpcp_request *request = &r->request;
     if (request->nargs != CMD_CLOSE_NARGS) {
         return ERROR;
     }
-    return COMAND_WRITE;
+    buffer_write(buff, hpcp_status_ok);
+    buffer_write(buff, 0);
+    selector_set_interest_key(key, OP_WRITE);
+    return CLOSE;
 }
 
 static unsigned cmd_get_process(struct request_st *r) {
@@ -698,7 +718,7 @@ static unsigned
 cmd_write(struct selector_key *key) {
     int           client_fd = ATTACHMENT(key)->client_fd;
     struct buffer *buff     = &ATTACHMENT(key)->write_buffer;
-    unsigned      ret       = AUTH_READ;
+    unsigned      ret       = COMAND_READ;
     uint8_t       *ptr;
     size_t        count;
     ssize_t       n;
@@ -717,6 +737,37 @@ cmd_write(struct selector_key *key) {
     }
     return ret;
 }
+
+
+////////////////////////////////////////////////////////////////////////////////
+// CLOSE
+////////////////////////////////////////////////////////////////////////////////
+
+/** escribe todos los bytes de la respuesta al mensaje `hello' */
+static unsigned
+close_write(struct selector_key *key) {
+    int           client_fd = ATTACHMENT(key)->client_fd;
+    struct buffer *buff     = &ATTACHMENT(key)->write_buffer;
+    unsigned      ret       = DONE;
+    uint8_t       *ptr;
+    size_t        count;
+    ssize_t       n;
+
+    if (!buffer_can_read(buff)) {
+        return ERROR;
+    }
+
+    ptr = buffer_read_ptr(buff, &count);
+    n   = write(client_fd, ptr, count);
+    if (n > 0) {
+        buffer_read_adv(buff, n);
+        selector_set_interest_key(key, OP_READ);
+    } else {
+        ret = ERROR;
+    }
+    return ret;
+}
+
 
 ////////////////////////////////////////////////////////////////////////////////
 // REQUEST_ERROR
@@ -751,8 +802,6 @@ cmd_close(int client_fd, struct buffer *buff) {
     uint8_t *ptr;
     size_t  count;
     ssize_t n;
-
-    // todo: estoy asumiendo que no quedo nada pendiente por enivar, cuando haga un read voy a ler 0x0x0
     buffer_write(buff, hpcp_status_ok);
     buffer_write(buff, 0);
     ptr = buffer_read_ptr(buff, &count);
@@ -760,7 +809,6 @@ cmd_close(int client_fd, struct buffer *buff) {
     if (n > 0) {
         buffer_read_adv(buff, n);
     }
-
 }
 
 /** definición de handlers para cada estado */
@@ -800,6 +848,13 @@ static const struct state_definition client_statbl[] = {
                 .on_write_ready   = request_error_write,
         },
         {
+                .state            = CLOSE,
+                .on_write_ready   = close_write,
+        },
+        {
+                .state            = DONE,
+        },
+        {
                 .state            = ERROR,
         }
 };
@@ -820,7 +875,7 @@ socksv5_read(struct selector_key *key) {
     struct state_machine     *stm = &ATTACHMENT(key)->stm;
     const enum socks_v5state st   = stm_handler_read(stm, key);
 
-    if (ERROR == st) {
+    if (ERROR == st  || DONE == st) {
         socksv5_done(key);
     }
 }
@@ -830,7 +885,7 @@ socksv5_write(struct selector_key *key) {
     struct state_machine     *stm = &ATTACHMENT(key)->stm;
     const enum socks_v5state st   = stm_handler_write(stm, key);
 
-    if (ERROR == st) {
+    if (ERROR == st  || DONE == st) {
         socksv5_done(key);
     }
 }
@@ -840,7 +895,7 @@ socksv5_block(struct selector_key *key) {
     struct state_machine     *stm = &ATTACHMENT(key)->stm;
     const enum socks_v5state st   = stm_handler_block(stm, key);
 
-    if (ERROR == st) {
+    if (ERROR == st || DONE == st ) {
         socksv5_done(key);
     }
 }

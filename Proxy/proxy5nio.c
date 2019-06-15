@@ -19,6 +19,7 @@
 #include "proxy_reporter.h"
 #include "../Utils/log.h"
 #include "metrics.h"
+#include "config.h"
 
 
 #define N(x) (sizeof(x)/sizeof((x)[0]))
@@ -108,19 +109,19 @@ enum proxy_v5_origin_state {
      *
      * Transiciones:
      */
-            O_COMUNICATE,
+    O_COMUNICATE,
     /*
      *
      *
      * Transiciones:
      */
-            O_DONE,
+    O_DONE,
     /*
      *
      *
      * Transiciones:
      */
-            O_ERROR
+    O_ERROR
 };
 
 ////////////////////////////////////////////////////////////////////
@@ -188,6 +189,9 @@ struct transform_st {
  * Se utiliza un contador de referencias (references) para saber cuando debemos
  * liberarlo finalmente, y un pool para reusar alocaciones previas.
  */
+
+extern metrics proxy_metrics;
+extern conf    proxy_configurations;
 struct proxy5 {
     /** información del cliente */
     struct sockaddr_storage client_addr;
@@ -286,7 +290,7 @@ proxy5_new(int client_fd) {
     buffer_init(&ret->write_buffer, N(ret->raw_buff_b), ret->raw_buff_b);
     buffer_compact(&ret->read_buffer, 0);
 
-    ret->transformation_on = 1;
+    ret->transformation_on = proxy_configurations.transformation_on;
     ret->chunked_set       = 0;
 
     ret->references = 1;
@@ -396,6 +400,9 @@ proxyv5_passive_accept(struct selector_key *key) {
     if (client != -1) {
         close(client);
     }
+
+    proxy_metrics.historic_accesses++;
+    proxy_metrics.concurrent_connections++;
     proxy5_destroy(state);
 }
 
@@ -622,7 +629,8 @@ connecting(struct selector_key *key) {
     } else {
         if (error == 0) {
             selector_set_interest(key->s, *d->client_fd,
-                                  OP_READ | OP_WRITE); // habiamos dejado de pollear al cliente, como nos conectamos pedimos lectura para ver si quedaba algo para leer
+                                  OP_READ |
+                                  OP_WRITE); // habiamos dejado de pollear al cliente, como nos conectamos pedimos lectura para ver si quedaba algo para leer
             *d->origin_fd = key->fd;
             selector_set_interest(key->s, *d->origin_fd,
                                   OP_READ | OP_WRITE);
@@ -1119,7 +1127,7 @@ transform_init(const unsigned state, struct selector_key *key) {
         close(outfd[0]); // cierro lectura en out
         close(STDERR_FILENO);
 
-        execl("/bin/sh", "sh", "-c", "cat", (char *) 0);
+        execl("/bin/sh", "sh", "-c", proxy_configurations.transformation_program, (char *) 0);
     } else {
         r->slavePid = pid;
 
@@ -1363,6 +1371,7 @@ proxyv5_done(struct selector_key *key) {
             close(fds[i]);
         }
     }
+    proxy_metrics.concurrent_connections--;
 }
 
 void
