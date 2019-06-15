@@ -480,17 +480,17 @@ handle_iteration(fd_selector s) {
                     }
                 }
             }
-            time_t t = time(NULL);
-            if (difftime(t, item->timestamp) >= 30) {
-                /*
-                 * si no se a registrado actividad en 90 segundos pasamos a liberaramos los recursos utilizados
-                 * de esto se encarga la funicion registrada en timeout
-                 */
-                if (item->handler->handle_timeout != 0) {
-                    log_warn("Connection in fd: %d has been closed for inactivity", item->fd);
-                    item->handler->handle_timeout(&key);
-                }
-            }
+//            time_t t = time(NULL);
+//            if (difftime(t, item->timestamp) >= 30) {
+//                /*
+//                 * si no se a registrado actividad en 90 segundos pasamos a liberaramos los recursos utilizados
+//                 * de esto se encarga la funicion registrada en timeout
+//                 */
+//                if (item->handler->handle_timeout != 0) {
+//                    log_warn("Connection in fd: %d has been closed for inactivity", item->fd);
+//                    item->handler->handle_timeout(&key);
+//                }
+//            }
         }
     }
 }
