@@ -627,7 +627,7 @@ static unsigned get_concurrent_connections(struct request_st *r) {
     }
     buff[0] = r->response_status;
     buff[1] = 0x01;
-    buff[2] = sizeof(proxy_metrics.concurrent_connections);
+    buff[2] = 4;
     buffer_write_adv(b, 3);
     // convert from an unsigned long int to a 4-byte array
     buff[3] = (int)((proxy_metrics.concurrent_connections >> 24) & 0xFF) ;
@@ -640,20 +640,50 @@ static unsigned get_concurrent_connections(struct request_st *r) {
 }
 
 static unsigned get_historic_accesses(struct request_st *r) {
-    uint8_t data_sizes[1] = {0x08};
-    uint8_t* data[1] = {(uint8_t *) &proxy_metrics.historic_accesses};
-    if(hpcp_response(r->wb, r->response_status, 0x01, data_sizes, data) == -1) {
-        return ERROR;
+    printf("funcion get_concurrent_connections\n");
+    buffer *b = r->wb;
+    size_t  n;
+    uint8_t *buff = buffer_write_ptr(b, &n);
+
+    int total_response_length = 2 + 1 + sizeof(proxy_metrics.historic_accesses); //minimo necesito 2 bytes para el response status y nresp, 1 para la longitud de la primer respuesta, sizeof(unisgned long long) para la respuesta
+    if(n < total_response_length) {
+        return -1;
     }
+    buff[0] = r->response_status;
+    buff[1] = 0x01;
+    buff[2] = 4;
+    buffer_write_adv(b, 3);
+    // convert from an unsigned long int to a 4-byte array
+    buff[3] = (int)((proxy_metrics.concurrent_connections >> 24) & 0xFF) ;
+    buff[4] = (int)((proxy_metrics.concurrent_connections >> 16) & 0xFF) ;
+    buff[5] = (int)((proxy_metrics.concurrent_connections >> 8) & 0XFF);
+    buff[6] = (int)((proxy_metrics.concurrent_connections & 0XFF));
+    buffer_write_adv(b, 4);
+
     return COMAND_WRITE;
 }
 
 static unsigned get_transferred_bytes(struct request_st *r) {
-    uint8_t data_sizes[1] = {0x08};
-    uint8_t* data[1] = {(uint8_t *) &proxy_metrics.transferred_bytes};
-    if(hpcp_response(r->wb, r->response_status, 0x01, data_sizes, data) == -1) {
-        return ERROR;
+    printf("funcion get_concurrent_connections\n");
+    buffer *b = r->wb;
+    size_t  n;
+    uint8_t *buff = buffer_write_ptr(b, &n);
+
+    int total_response_length = 2 + 1 + sizeof(proxy_metrics.transferred_bytes); //minimo necesito 2 bytes para el response status y nresp, 1 para la longitud de la primer respuesta, sizeof(unisgned long long) para la respuesta
+    if(n < total_response_length) {
+        return -1;
     }
+    buff[0] = r->response_status;
+    buff[1] = 0x01;
+    buff[2] = 4;
+    buffer_write_adv(b, 3);
+    // convert from an unsigned long int to a 4-byte array
+    buff[3] = (int)((proxy_metrics.concurrent_connections >> 24) & 0xFF) ;
+    buff[4] = (int)((proxy_metrics.concurrent_connections >> 16) & 0xFF) ;
+    buff[5] = (int)((proxy_metrics.concurrent_connections >> 8) & 0XFF);
+    buff[6] = (int)((proxy_metrics.concurrent_connections & 0XFF));
+    buffer_write_adv(b, 4);
+
     return COMAND_WRITE;
 }
 
