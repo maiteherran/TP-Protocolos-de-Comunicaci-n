@@ -611,6 +611,32 @@ static unsigned get_transformation_program_status(struct request_st *r) {
 }
 
 static unsigned get_media_types(struct request_st *r) {
+    printf("funcion get_media_types\n");
+    buffer *b = r->wb;
+    size_t  n;
+    uint8_t *buff = buffer_write_ptr(b, &n);
+
+    int total_response_length = 2;
+    if(n < total_response_length) {
+        return -1;
+    }
+    buff[0] = r->response_status;
+    buff[1] = proxy_configurations.n_media_types;
+
+    int k = 2;
+    for (int j = 0 ; j < proxy_configurations.n_media_types ; j ++) {
+        int arglen = strlen(proxy_configurations.media_types[j]);
+        total_response_length += 1 + arglen; //1 para el arglen  y arglen para el arg
+        if(n < total_response_length) {
+            return -1;
+        }
+        buff[k++] = arglen;
+        for (int i = 0; i < arglen; i++) {
+            buff[k++] = (uint8_t) proxy_configurations.transformation_program[i];
+        }
+        buffer_write_adv(b, total_response_length);
+    }
+
     return COMAND_WRITE;
 }
 
