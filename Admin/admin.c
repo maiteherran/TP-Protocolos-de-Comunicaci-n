@@ -571,17 +571,23 @@ static unsigned cmd_get_configurations_process(struct request_st *r) {
 }
 
 static unsigned get_transformation_program(struct request_st *r) {
-    if (proxy_configurations.transformation_program == NULL) {
-        if(hpcp_response(r->wb, r->response_status, 0x00, NULL, NULL) == -1) {
-            return ERROR;
-        }
-    } else {
-        uint8_t data_sizes[1] = {strlen(proxy_configurations.transformation_program)};
-        uint8_t* data[1] = {(uint8_t *) &proxy_configurations.transformation_program};
-        if(hpcp_response(r->wb, r->response_status, 0x01, data_sizes, data) == -1) {
-            return ERROR;
-        }
+    printf("funcion get_transformation_program\n");
+    buffer *b = r->wb;
+    size_t  n;
+    uint8_t *buff = buffer_write_ptr(b, &n);
+
+    int arglen = strlen(proxy_configurations.transformation_program);
+    int total_response_length = 2 + 1 + arglen; //minimo necesito 2 bytes para el response status y nresp, 1 para la longitud de la primer respuesta, sizeof(unisgned long long) para la respuesta
+    if(n < total_response_length) {
+        return -1;
     }
+    buff[0] = r->response_status;
+    buff[1] = 0x01;
+    buff[2] = arglen;
+    for (int i = 0; i < arglen; i++) {
+        buff[3 + i] = (uint8_t) proxy_configurations.transformation_program[i];
+    }
+    buffer_write_adv(b, 3 + arglen);
     return COMAND_WRITE;
 }
 
