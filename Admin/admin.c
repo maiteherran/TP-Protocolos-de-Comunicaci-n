@@ -592,11 +592,21 @@ static unsigned get_transformation_program(struct request_st *r) {
 }
 
 static unsigned get_transformation_program_status(struct request_st *r) {
-    uint8_t data_sizes[1] = {0x01};
-    uint8_t* data[1] = {(uint8_t *) &proxy_configurations.transformation_on};
-    if(hpcp_response(r->wb, r->response_status, 0x01, data_sizes, data) == -1) {
-        return ERROR;
+    printf("funcion get_transformation_program_status\n");
+    buffer *b = r->wb;
+    size_t  n;
+    uint8_t *buff = buffer_write_ptr(b, &n);
+
+    int total_response_length = 4; //minimo necesito 2 bytes para el response status y nresp, 1 para la longitud de la primer respuesta, sizeof(unisgned long long) para la respuesta
+    if(n < total_response_length) {
+        return -1;
     }
+    buff[0] = r->response_status;
+    buff[1] = 0x01;
+    buff[2] = 0x01;
+    buff[3] = proxy_configurations.transformation_on;
+
+    buffer_write_adv(b, total_response_length);
     return COMAND_WRITE;
 }
 
