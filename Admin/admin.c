@@ -15,6 +15,8 @@
 #include "../Utils/stm.h"
 #include "HpcpParser/hpcpRequest.h"
 #include "../Utils/log.h"
+#include "config.h"
+#include "../Proxy/metrics.h"
 
 #define N(x) (sizeof(x)/sizeof((x)[0]))
 #define MSG_NOSIGNAL       0x4000
@@ -35,6 +37,8 @@
 #define CONCURRENT_CONNECTIONS 0x01
 #define HISTORIC_ACCESSES 0x02
 #define TRANSFERRED_BYTES 0X04
+
+
 
 /** maquina de estados general */
 enum socks_v5state {
@@ -68,7 +72,7 @@ struct request_st {
 
     /*Request que está siendo parseado*/
     struct hpcp_request request;
-    enum hpcp_response_status;
+    enum hpcp_response_status response_status;
 
     const int *client_fd;
 };
@@ -109,7 +113,6 @@ struct hpcp {
     /** siguiente en el pool */
     struct hpcp *next;
 };
-
 
 /**
  * Pool de `struct hpcp', para ser reusados.
@@ -456,6 +459,21 @@ auth_write(struct selector_key *key) {
 
 static unsigned
 cmd_process(struct selector_key *key, struct request_st *request);
+static unsigned cmd_close_process(struct request_st *r);
+static unsigned cmd_get_process(struct request_st *r);
+static unsigned cmd_get_configurations_process(struct request_st *r);
+static unsigned get_transformation_program(struct request_st *r);
+static unsigned get_transformation_program_status(struct request_st *r);
+static unsigned get_media_types(struct request_st *r);
+static unsigned cmd_get_metrics_process(struct request_st *r);
+static unsigned get_concurrent_connections(struct request_st *r);
+static unsigned get_historic_accesses(struct request_st *r);
+static unsigned get_transferred_bytes(struct request_st *r);
+static unsigned cmd_set_process(struct request_st *r);
+static unsigned cmd_set_configurations_process(struct request_st *r);
+static unsigned set_transformation_program(struct request_st *r);
+static unsigned set_transformation_program_status(struct request_st *r);
+static unsigned set_media_types(struct request_st *r);
 
 /** inicializa las variables de los estados HELLO_… */
 static void
@@ -500,132 +518,172 @@ cmd_process(struct selector_key *key, struct request_st *r) { // recibo error y 
     struct hpcp_request *request = &r->request;
     switch (request->cmd) {
         case hpcp_request_cmd_close:
-            return cmd_close_process(request);
+            return cmd_close_process(r);
         case hpcp_request_cmd_get:
-            return cmd_get_process(request);
+            return cmd_get_process(r);
         case hpcp_request_cmd_set:
-            return cmd_set_process(request);
+            return cmd_set_process(r);
         default:
             return ERROR;
     }
 }
 
-static unsigned cmd_close_process(struct hpcp_request *request) {
+static unsigned cmd_close_process(struct request_st *r) {
+    struct hpcp_request *request = &r->request;
     if (request->nargs != CMD_CLOSE_NARGS) {
         return ERROR;
     }
     return COMAND_WRITE;
 }
 
-static unsigned cmd_get_process(struct hpcp_request *request) {
+static unsigned cmd_get_process(struct request_st *r) {
+    struct hpcp_request *request = &r->request;
     //el primer argumento es de un byte y diferencia entre get configurations y get metrics
     if (request->nargs < CMD_GET_MIN_NARGS || request->args_sizes[0] != 0x01) {
         return ERROR;
     }
     switch (request->args[0][0]) {
         case CONFIGURATIONS:
-            return cmd_get_configurations_process(request);
+            return cmd_get_configurations_process(r);
         case METRICS:
-            return cmd_get_metrics_process(request);
+            return cmd_get_metrics_process(r);
         default:
             return ERROR;
     }
 }
 
-static unsigned cmd_get_configurations_process(struct hpcp_request *request) {
+static unsigned cmd_get_configurations_process(struct request_st *r) {
+    struct hpcp_request *request = &r->request;
     if (request->nargs != 0x02 || request->args_sizes[1] != 0x01) {
         return ERROR;
     }
     switch (request->args[1][0]) {
         case TRANSFORMATION_PROGRAM:
-            return get_transformation_program(request);
+            return get_transformation_program(r);
         case TRANSFORMATION_PROGRAM_STATUS:
-            return get_transformation_program_status(request);
+            return get_transformation_program_status(r);
         case MEDIA_TYPES:
-            return get_media_types(request);
+            return get_media_types(r);
         default:
             return ERROR;
     }
 }
 
-static unsigned get_transformation_program(struct hpcp_request *request) {
+static unsigned get_transformation_program(struct request_st *r) {
+    if (proxy_configurations.transformation_program == NULL) {
+        if(hpcp_response(r->wb, r->response_status, 0x00, NULL, NULL) == -1) {
+            return ERROR;
+        }
+    } else {
+        uint8_t data_sizes[1] = {strlen(proxy_configurations.transformation_program)};
+        uint8_t* data[1] = {(uint8_t *) &proxy_configurations.transformation_program};
+        if(hpcp_response(r->wb, r->response_status, 0x01, data_sizes, data) == -1) {
+            return ERROR;
+        }
+    }
     return COMAND_WRITE;
 }
 
-static unsigned get_transformation_program_status(struct hpcp_request *request) {
+static unsigned get_transformation_program_status(struct request_st *r) {
+    uint8_t data_sizes[1] = {0x01};
+    uint8_t* data[1] = {(uint8_t *) &proxy_configurations.transformation_on};
+    if(hpcp_response(r->wb, r->response_status, 0x01, data_sizes, data) == -1) {
+        return ERROR;
+    }
     return COMAND_WRITE;
 }
 
-static unsigned get_media_types(struct hpcp_request *request) {
+static unsigned get_media_types(struct request_st *r) {
     return COMAND_WRITE;
 }
 
-static unsigned cmd_get_metrics_process(struct hpcp_request *request) {
+static unsigned cmd_get_metrics_process(struct request_st *r) {
+    struct hpcp_request *request = &r->request;
     if (request->nargs != 0x02 || request->args_sizes[1] != 0x01) {
         return ERROR;
     }
     switch (request->args[1][0]) {
         case CONCURRENT_CONNECTIONS:
-            return get_concurrent_connections(request);
+            return get_concurrent_connections(r);
         case HISTORIC_ACCESSES:
-            return get_historic_accesses(request);
+            return get_historic_accesses(r);
         case TRANSFERRED_BYTES:
-            return get_transferred_bytes(request);
+            return get_transferred_bytes(r);
         default:
             return ERROR;
     }
 }
 
-static unsigned get_concurrent_connections(struct hpcp_request *request) {
+static unsigned get_concurrent_connections(struct request_st *r) {
+    uint8_t data_sizes[1] = {0x08};
+    uint8_t* data[1] = {(uint8_t *) &proxy_metrics.concurrent_connections};
+    if(hpcp_response(r->wb, r->response_status, 0x01, data_sizes, data) == -1) {
+        return ERROR;
+    }
     return COMAND_WRITE;
 }
 
-static unsigned get_historic_accesses(struct hpcp_request *request) {
+static unsigned get_historic_accesses(struct request_st *r) {
+    uint8_t data_sizes[1] = {0x08};
+    uint8_t* data[1] = {(uint8_t *) &proxy_metrics.historic_accesses};
+    if(hpcp_response(r->wb, r->response_status, 0x01, data_sizes, data) == -1) {
+        return ERROR;
+    }
     return COMAND_WRITE;
 }
 
-static unsigned get_transferred_bytes(struct hpcp_request *request) {
+static unsigned get_transferred_bytes(struct request_st *r) {
+    uint8_t data_sizes[1] = {0x08};
+    uint8_t* data[1] = {(uint8_t *) &proxy_metrics.transferred_bytes};
+    if(hpcp_response(r->wb, r->response_status, 0x01, data_sizes, data) == -1) {
+        return ERROR;
+    }
     return COMAND_WRITE;
 }
 
-static unsigned cmd_set_process(struct hpcp_request *request) {
+static unsigned cmd_set_process(struct request_st *r) {
+    struct hpcp_request *request = &r->request;
     if (request->nargs < CMD_SET_MIN_NARGS || request->args_sizes[0] != 0x01) {
         return ERROR;
     }
     switch (request->args[0][0]) {
         case CONFIGURATIONS:
-            return cmd_set_configurations_process(request);
+            return cmd_set_configurations_process(r);
         default:
             return ERROR;
     }
 }
 
-static unsigned cmd_set_configurations_process(struct hpcp_request *request) {
+
+static unsigned cmd_set_configurations_process(struct request_st *r) {
+    struct hpcp_request *request = &r->request;
     if (request->args_sizes[1] != 0x01) {
         return ERROR;
     }
     switch (request->args[1][0]) {
         case TRANSFORMATION_PROGRAM:
-            return set_transformation_program(request);
+            return set_transformation_program(r);
         case TRANSFORMATION_PROGRAM_STATUS:
-            return set_transformation_program_status(request);
+            return set_transformation_program_status(r);
         case MEDIA_TYPES:
-            return set_media_types(request);
+            return set_media_types(r);
         default:
             return ERROR;
     }
 }
 
-static unsigned set_transformation_program(struct hpcp_request *request) {
+static unsigned set_transformation_program(struct request_st *r) {
+    char transformation_program[r->request.args_sizes[2]];
+    memcpy(transformation_program, r->request.args[2], r->request.args_sizes[2]);
 
     return COMAND_WRITE;
 }
 
-static unsigned set_transformation_program_status(struct hpcp_request *request) {
+static unsigned set_transformation_program_status(struct request_st *r) {
     return COMAND_WRITE;
 }
 
-static unsigned set_media_types(struct hpcp_request *request) {
+static unsigned set_media_types(struct request_st *r) {
     return COMAND_WRITE;
 }
 
