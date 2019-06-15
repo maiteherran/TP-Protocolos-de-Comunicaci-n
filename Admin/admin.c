@@ -647,7 +647,7 @@ static unsigned get_concurrent_connections(struct request_st *r) {
     }
     buff[0] = r->response_status;
     buff[1] = 0x01;
-    buff[2] = sizeof(proxy_metrics.concurrent_connections);
+    buff[2] = 4;//sizeof(proxy_metrics.concurrent_connections);
     buffer_write_adv(b, 3);
     // convert from an unsigned long int to a 4-byte array
     buff[3] = (int)((proxy_metrics.concurrent_connections >> 24) & 0xFF) ;

@@ -20,19 +20,17 @@
 #include "../Utils/log.h"
 #include "metrics.h"
 #include "config.h"
-
+#include "../Utils/netutils.h"
+#include "../Utils/string_utils.h"
 
 #define N(x) (sizeof(x)/sizeof((x)[0]))
 #define BUFFER_SIZE 4096
 #define MSG_NOSIGNAL       0x4000
 
-//lista:
-//Host: bar:9090
-//cerrar bien en request y response
-//logear
-//metricas
-//header accept
-//accesos
+// lista:
+// Host: bar:9090
+// cerrar bien en request y response
+// header accept
 // escuchar las 2 bocas y poner un timer en el selector de 90s si nadie me mando nada cierro
 // cat | gzip -d | cat
 
@@ -181,6 +179,11 @@ struct transform_st {
     int                        *origin_fd;
 };
 
+struct access_st {
+    char request[256];
+    char response[256];
+};
+
 /*
  * Si bien cada estado tiene su propio struct que le da un alcance
  * acotado, disponemos de la siguiente estructura para hacer una única
@@ -218,6 +221,7 @@ struct proxy5 {
     struct request_st   request;
     struct transform_st transform;
     struct response_st  response;
+    struct access_st    access;
 
     int transformation_on; // TODO: por ahora esta aca en una varible y me fijo en response si entro o no
     int chunked_set;
@@ -246,7 +250,7 @@ static unsigned       pool_size = 0;  // tamaño actual
 static struct proxy5  *pool     = 0;  // pool propiamente dicho
 
 void
-log_acces_wrapper(char *request, char *response);
+log_access_wrapper(struct access_st *a, const struct sockaddr *addr);
 
 static const struct state_definition *
 proxy5_client_describe_states(void);
@@ -294,6 +298,8 @@ proxy5_new(int client_fd) {
     ret->chunked_set       = 0;
 
     ret->references = 1;
+    proxy_metrics.historic_accesses++;
+    proxy_metrics.concurrent_connections++;
     finally:
     return ret;
 }
@@ -305,6 +311,7 @@ proxy5_destroy_(struct proxy5 *s) {
         freeaddrinfo(s->origin_resolution);
         s->origin_resolution = 0;
     }
+    proxy_metrics.concurrent_connections--;
     free(s);
 }
 
@@ -400,9 +407,6 @@ proxyv5_passive_accept(struct selector_key *key) {
     if (client != -1) {
         close(client);
     }
-
-    proxy_metrics.historic_accesses++;
-    proxy_metrics.concurrent_connections++;
     proxy5_destroy(state);
 }
 
@@ -484,6 +488,7 @@ request_process(struct selector_key *key, struct request_st *d) {
 ////////////////////////////////////////////////////////////////////////////////
 // RESOLVE
 ////////////////////////////////////////////////////////////////////////////////
+
 static unsigned
 request_connect(struct selector_key *key, struct request_st *d);
 
@@ -701,6 +706,7 @@ origin_read(struct selector_key *key) {
 static unsigned
 origin_write(struct selector_key *key) {
     struct request_st *d        = &ATTACHMENT(key)->request;
+    struct access_st  *a        = &ATTACHMENT(key)->access;
     unsigned          ret       = O_COMUNICATE;
     buffer            *buff     = &ATTACHMENT(key)->read_buffer; // este es el que usa el cliente para leer
     int               origin_fd = ATTACHMENT(key)->origin_fd;
@@ -721,6 +727,7 @@ origin_write(struct selector_key *key) {
 
     if (!d->header_close_added) {
         if ((eol = strstr(read_ptr, "\r\n")) != NULL) { // es la primera linea del request
+            strncpy_(a->request, read_ptr, (int) (eol - read_ptr), 256);
             n = write(origin_fd, read_ptr, (size_t) (eol - read_ptr) + 2);
             if (n >= 0) {
                 buffer_read_adv(buff, (eol - read_ptr) + 2);
@@ -802,6 +809,7 @@ client_read(struct selector_key *key) {
 /* Escribimos la respuesta del origin server en el cliente*/
 static unsigned
 client_write(struct selector_key *key) {
+    struct access_st   *a               = &ATTACHMENT(key)->access;
     int                trasformation_on = ATTACHMENT(key)->transformation_on;
     buffer             *rb              = &ATTACHMENT(key)->write_buffer; // este es el que usa el origin para escribir
     struct response_st *r               = &ATTACHMENT(key)->response;
@@ -838,6 +846,7 @@ client_write(struct selector_key *key) {
     switch (r->state) {
         case RESPONSE_STATUS:
             *eol = '\r';
+            strncpy_(a->response, read_ptr, (int) (eol - read_ptr), 256);
             n = write(*r->client_fd, read_ptr, (size_t) (eol - read_ptr) + 2);
             if (n > 0) {
                 buffer_read_adv(rb, (eol - read_ptr) + 2);
@@ -985,6 +994,7 @@ http_body_write(struct selector_key *key) {
 ////////////////////////////////////////////////////////////////////////////////
 // TRANSFORM
 ////////////////////////////////////////////////////////////////////////////////
+
 static void
 transf_write(struct selector_key *key);
 
@@ -1358,6 +1368,7 @@ proxyv5_close(struct selector_key *key) {
 
 static void
 proxyv5_done(struct selector_key *key) {
+    log_access_wrapper(&ATTACHMENT(key)->access, (struct sockaddr *) &ATTACHMENT(key)->client_addr);
     log_debug("CONEXION CERRADA");
     const int     fds[] = {
             ATTACHMENT(key)->client_fd,
@@ -1371,13 +1382,11 @@ proxyv5_done(struct selector_key *key) {
             close(fds[i]);
         }
     }
-    proxy_metrics.concurrent_connections--;
 }
 
 void
-log_acces_wrapper(char *request, char *response) {
-    const struct sockaddr *addr = (struct sockaddr *) &ATTACHMENT(key)->client_addr;
-    char                  buff[256];
-    sockaddr_to_human(buff, 256, addr);
-    log_acces("%s - \"%s\" - \"%s\"", buff, request, response);
+log_access_wrapper(struct access_st *a, const struct sockaddr *addr) {
+    char ip[128];
+    sockaddr_to_human(ip, 128, addr);
+    log_acces("%s - \"%s\" - \"%s\"", ip, a->request, a->response);
 }
