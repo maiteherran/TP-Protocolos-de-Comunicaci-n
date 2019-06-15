@@ -143,5 +143,30 @@ extern bool hpcp_request_is_done(const enum hpcp_request_state st, bool *errored
     return st >= hpcp_request_done;
 }
 
+extern int hpcp_response(buffer *b, const enum hpcp_response_status response_status, uint8_t nresp, uint8_t* data_sizes, uint8_t** data) {
+    size_t  n;
+    uint8_t *buff = buffer_write_ptr(b, &n);
+    int total_response_length = 2; //minimo necesito 2 bytes para el response status y nresp
+    if(n < total_response_length) {
+        return -1;
+    }
+    buffer_write(b, response_status);
+    buffer_write(b, nresp);
+    buffer_write_adv(b, 2);
+    for (int i = 0; i < nresp ; i++) {
+        total_response_length += 1 + data_sizes[i]; //necesito lugar para el argumento_i que es de longitud data_size[i] y para el data_size del argumento_i que ocupa 1 byte
+        if(n < total_response_length) {
+            return -1;
+        }
+        buffer_write(b, data_sizes[i]);
+        buffer_write_adv(b, 1);
+        for (int j = 0; j < data_sizes[i] ; j ++) {
+            buffer_write(b, data[i][j]);
+            buffer_write_adv(b, 1);
+        }
+    }
+    return total_response_length;
+}
+
 
 

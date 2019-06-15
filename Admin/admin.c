@@ -15,6 +15,9 @@
 #include "../Utils/stm.h"
 #include "config.h"
 #include "HpcpParser/hpcpRequest.h"
+#include "../Utils/log.h"
+#include "config.h"
+#include "../Proxy/metrics.h"
 
 #define N(x) (sizeof(x)/sizeof((x)[0]))
 #define MSG_NOSIGNAL       0x4000
@@ -35,6 +38,8 @@
 #define CONCURRENT_CONNECTIONS 0x01
 #define HISTORIC_ACCESSES 0x02
 #define TRANSFERRED_BYTES 0X04
+
+
 
 /** maquina de estados general */
 enum socks_v5state {
@@ -67,8 +72,8 @@ struct request_st {
     struct hpcp_request_parser *hpcp_parser;
 
     /*Request que está siendo parseado*/
-    struct hpcp_request *request;
-    enum hpcp_response_status;
+    struct hpcp_request request;
+    enum hpcp_response_status response_status;
 
     const int *client_fd;
 };
@@ -109,7 +114,6 @@ struct hpcp {
     /** siguiente en el pool */
     struct hpcp *next;
 };
-
 
 /**
  * Pool de `struct hpcp', para ser reusados.
@@ -153,8 +157,10 @@ socks5_new(int client_fd) {
     buffer_init(&ret->read_buffer, N(ret->raw_buff_a), ret->raw_buff_a);
     buffer_init(&ret->write_buffer, N(ret->raw_buff_b), ret->raw_buff_b);
 
+    //ret->hpcp_parser.request = malloc(sizeof(struct hpcp_request));
+
     ret->request.client_fd   = &ret->client_fd;
-    ret->request.request     = ret->hpcp_parser.request;
+    ret->hpcp_parser.request = &ret->request.request;
     ret->request.hpcp_parser = &ret->hpcp_parser;
     ret->request.rb          = &ret->read_buffer;
     ret->request.wb          = &ret->write_buffer;
@@ -167,7 +173,7 @@ socks5_new(int client_fd) {
 /** realmente destruye */
 static void
 socks5_destroy_(struct hpcp *s) {
-    free_hpcp_request(s->request.request);
+    free_hpcp_request(&s->request.request);
     free(s);
 }
 
@@ -262,18 +268,24 @@ socksv5_passive_accept(struct selector_key *key) {
     socks5_destroy(state);
 }
 
+static void
+on_read_departure(const unsigned state, struct selector_key *key) {
+    struct request_st *r = &ATTACHMENT(key)->request;
+//    free_hpcp_request(r->request);
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // HELLO_READ
 ////////////////////////////////////////////////////////////////////////////////
 
 static unsigned
-hello_process(struct hpcp_request *request);
+hello_process(struct selector_key *key, struct request_st *r);
 
 /** inicializa las variables de los estados HELLO_… */
 static void
 hello_read_init(const unsigned state, struct selector_key *key) {
     struct request_st *r = &ATTACHMENT(key)->request;
-    r->hpcp_parser->state = hpcp_request_cmd;
+    r->hpcp_parser->state   = hpcp_request_cmd;
 }
 
 /** lee todos los bytes del mensaje de tipo `hello' y inicia su proceso */
@@ -295,9 +307,10 @@ hello_read(struct selector_key *key) {
     ptr = buffer_write_ptr(buff, &count);
     n   = read(*r->client_fd, ptr, count);
     if (n > 0) {
+        buffer_write_adv(buff, n);
         st = hpcp_request_consume(buff, r->hpcp_parser, &error);
         if (hpcp_request_is_done(st, &error)) {
-            ret = hello_process(r->request);
+            ret = hello_process(key, r);
         }
     } else {
         ret = ERROR;
@@ -307,19 +320,19 @@ hello_read(struct selector_key *key) {
 
 /** procesamiento del mensaje `hello' */
 static unsigned
-hello_process(struct hpcp_request *request) { // recivo error y proceso la respuesta
-    struct buffer *buff = &ATTACHMENT(key)->write_buffer;
+hello_process(struct selector_key *key, struct request_st *r) { // recivo error y proceso la respuesta
+    struct buffer *buff = r->wb;
+    struct hpcp_request *request = &r->request;
     if (request->nargs != CMD_HELLO_NARGS || request->args_sizes[0] != VERSION_SIZE) {
         printf("invalid hello args\n");
         return ERROR;
     }
-    if (request->args[0][0] != 0x01 || request->args[0][1] != 0x00) {
-        printf("invalid version\n");
-        return ERROR;
-    }
+//    if (request->args[0][0] != 0x01 || request->args[0][1] != 0x00) {
+//        printf("invalid version\n");
+//        return ERROR;
+//    }
     buffer_write(buff, hpcp_status_ok);
     buffer_write(buff, 0x00);
-    free_hpcp_request(request);
     selector_set_interest_key(key, OP_WRITE);
     return HELLO_WRITE;
 }
@@ -358,7 +371,7 @@ hello_write(struct selector_key *key) {
 ////////////////////////////////////////////////////////////////////////////////
 
 static unsigned
-auth_process(struct hpcp_request *request);
+auth_process(struct selector_key *key, struct request_st *r);
 
 /** inicializa las variables de los estados HELLO_… */
 static void
@@ -371,7 +384,7 @@ auth_read_init(const unsigned state, struct selector_key *key) {
 static unsigned
 auth_read(struct selector_key *key) {
     struct request_st       *r    = &ATTACHMENT(key)->request;
-    unsigned                ret   = HELLO_READ;
+    unsigned                ret   = AUTH_READ;
     bool                    error = false;
     struct buffer           *buff = r->rb;
     enum hpcp_request_state st;
@@ -386,9 +399,10 @@ auth_read(struct selector_key *key) {
     ptr = buffer_write_ptr(buff, &count);
     n   = read(*r->client_fd, ptr, count);
     if (n > 0) {
+        buffer_write_adv(buff, n);
         st = hpcp_request_consume(buff, r->hpcp_parser, &error);
         if (hpcp_request_is_done(st, &error)) {
-            ret = auth_process(r->request);
+            ret = auth_process(key, r);
         }
     } else {
         ret = ERROR;
@@ -398,17 +412,17 @@ auth_read(struct selector_key *key) {
 
 /** procesamiento del mensaje `hello' */
 static unsigned
-auth_process(struct hpcp_request *request) { // recivo error y proceso la respuesta
-    struct buffer *buff = &ATTACHMENT(key)->write_buffer;
+auth_process(struct selector_key *key, struct request_st *r) { // recivo error y proceso la respuesta
+    struct buffer *buff = r->wb;
+    struct hpcp_request *request = &r->request;
     if (request->nargs != CMD_AUTH_NARGS) {
         printf("invalid hello args\n");
         return hpcp_request_error_invalid_args;
     }
     buffer_write(buff, hpcp_status_ok);
     buffer_write(buff, 0x00);
-    free_hpcp_request(request);
     selector_set_interest_key(key, OP_WRITE);
-    return HELLO_WRITE;
+    return AUTH_WRITE;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -420,7 +434,7 @@ static unsigned
 auth_write(struct selector_key *key) {
     int           client_fd = ATTACHMENT(key)->client_fd;
     struct buffer *buff     = &ATTACHMENT(key)->write_buffer;
-    unsigned      ret       = AUTH_READ;
+    unsigned      ret       = COMAND_READ;
     uint8_t       *ptr;
     size_t        count;
     ssize_t       n;
@@ -445,7 +459,22 @@ auth_write(struct selector_key *key) {
 ////////////////////////////////////////////////////////////////////////////////
 
 static unsigned
-cmd_process(struct hpcp_request *request);
+cmd_process(struct selector_key *key, struct request_st *request);
+static unsigned cmd_close_process(struct request_st *r);
+static unsigned cmd_get_process(struct request_st *r);
+static unsigned cmd_get_configurations_process(struct request_st *r);
+static unsigned get_transformation_program(struct request_st *r);
+static unsigned get_transformation_program_status(struct request_st *r);
+static unsigned get_media_types(struct request_st *r);
+static unsigned cmd_get_metrics_process(struct request_st *r);
+static unsigned get_concurrent_connections(struct request_st *r);
+static unsigned get_historic_accesses(struct request_st *r);
+static unsigned get_transferred_bytes(struct request_st *r);
+static unsigned cmd_set_process(struct request_st *r);
+static unsigned cmd_set_configurations_process(struct request_st *r);
+static unsigned set_transformation_program(struct request_st *r);
+static unsigned set_transformation_program_status(struct request_st *r);
+static unsigned set_media_types(struct request_st *r);
 
 /** inicializa las variables de los estados HELLO_… */
 static void
@@ -458,7 +487,7 @@ cmd_read_init(const unsigned state, struct selector_key *key) {
 static unsigned
 cmd_read(struct selector_key *key) {
     struct request_st       *r    = &ATTACHMENT(key)->request;
-    unsigned                ret   = HELLO_READ;
+    unsigned                ret   = COMAND_READ;
     bool                    error = false;
     struct buffer           *buff = r->rb;
     enum hpcp_request_state st;
@@ -473,9 +502,10 @@ cmd_read(struct selector_key *key) {
     ptr = buffer_write_ptr(buff, &count);
     n   = read(*r->client_fd, ptr, count);
     if (n > 0) {
+        buffer_write_adv(buff, n);
         st = hpcp_request_consume(buff, r->hpcp_parser, &error);
         if (hpcp_request_is_done(st, &error)) {
-            ret = cmd_process(r->request);
+            ret = cmd_process(key, r);
         }
     } else {
         ret = ERROR;
@@ -484,136 +514,177 @@ cmd_read(struct selector_key *key) {
 }
 
 static unsigned
-cmd_process(struct hpcp_request *request) { // recibo error y proceso la respuesta
-    struct buffer *buff = &ATTACHMENT(key)->write_buffer;
+cmd_process(struct selector_key *key, struct request_st *r) { // recibo error y proceso la respuesta
+    struct buffer *buff = r->wb;
+    struct hpcp_request *request = &r->request;
     switch (request->cmd) {
         case hpcp_request_cmd_close:
-            return cmd_close_process(request);
+            return cmd_close_process(r);
         case hpcp_request_cmd_get:
-            return cmd_get_process(request);
+            return cmd_get_process(r);
         case hpcp_request_cmd_set:
-            return cmd_set_process(request);
+            return cmd_set_process(r);
         default:
             return ERROR;
     }
 }
 
-static unsigned cmd_close_process(struct hpcp_request *request) {
+static unsigned cmd_close_process(struct request_st *r) {
+    struct hpcp_request *request = &r->request;
     if (request->nargs != CMD_CLOSE_NARGS) {
         return ERROR;
     }
     return COMAND_WRITE;
 }
 
-static unsigned cmd_get_process(struct hpcp_request *request) {
+static unsigned cmd_get_process(struct request_st *r) {
+    struct hpcp_request *request = &r->request;
     //el primer argumento es de un byte y diferencia entre get configurations y get metrics
     if (request->nargs < CMD_GET_MIN_NARGS || request->args_sizes[0] != 0x01) {
         return ERROR;
     }
     switch (request->args[0][0]) {
         case CONFIGURATIONS:
-            return cmd_get_configurations_process(request);
+            return cmd_get_configurations_process(r);
         case METRICS:
-            return cmd_get_metrics_process(request);
+            return cmd_get_metrics_process(r);
         default:
             return ERROR;
     }
 }
 
-static unsigned cmd_get_configurations_process(struct hpcp_request *request) {
+static unsigned cmd_get_configurations_process(struct request_st *r) {
+    struct hpcp_request *request = &r->request;
     if (request->nargs != 0x02 || request->args_sizes[1] != 0x01) {
         return ERROR;
     }
     switch (request->args[1][0]) {
         case TRANSFORMATION_PROGRAM:
-            return get_transformation_program(request);
+            return get_transformation_program(r);
         case TRANSFORMATION_PROGRAM_STATUS:
-            return get_transformation_program_status(request);
+            return get_transformation_program_status(r);
         case MEDIA_TYPES:
-            return get_media_types(request);
+            return get_media_types(r);
         default:
             return ERROR;
     }
 }
 
-static unsigned get_transformation_program(struct hpcp_request *request) {
+static unsigned get_transformation_program(struct request_st *r) {
+    if (proxy_configurations.transformation_program == NULL) {
+        if(hpcp_response(r->wb, r->response_status, 0x00, NULL, NULL) == -1) {
+            return ERROR;
+        }
+    } else {
+        uint8_t data_sizes[1] = {strlen(proxy_configurations.transformation_program)};
+        uint8_t* data[1] = {(uint8_t *) &proxy_configurations.transformation_program};
+        if(hpcp_response(r->wb, r->response_status, 0x01, data_sizes, data) == -1) {
+            return ERROR;
+        }
+    }
     return COMAND_WRITE;
 }
 
-static unsigned get_transformation_program_status(struct hpcp_request *request) {
+static unsigned get_transformation_program_status(struct request_st *r) {
+    uint8_t data_sizes[1] = {0x01};
+    uint8_t* data[1] = {(uint8_t *) &proxy_configurations.transformation_on};
+    if(hpcp_response(r->wb, r->response_status, 0x01, data_sizes, data) == -1) {
+        return ERROR;
+    }
     return COMAND_WRITE;
 }
 
-static unsigned get_media_types(struct hpcp_request *request) {
+static unsigned get_media_types(struct request_st *r) {
     return COMAND_WRITE;
 }
 
-static unsigned cmd_get_metrics_process(struct hpcp_request *request) {
+static unsigned cmd_get_metrics_process(struct request_st *r) {
+    struct hpcp_request *request = &r->request;
     if (request->nargs != 0x02 || request->args_sizes[1] != 0x01) {
         return ERROR;
     }
     switch (request->args[1][0]) {
         case CONCURRENT_CONNECTIONS:
-            return get_concurrent_connections(request);
+            return get_concurrent_connections(r);
         case HISTORIC_ACCESSES:
-            return get_historic_accesses(request);
+            return get_historic_accesses(r);
         case TRANSFERRED_BYTES:
-            return get_transferred_bytes(request);
+            return get_transferred_bytes(r);
         default:
             return ERROR;
     }
 }
 
-static unsigned get_concurrent_connections(struct hpcp_request *request) {
+static unsigned get_concurrent_connections(struct request_st *r) {
+    uint8_t data_sizes[1] = {0x08};
+    uint8_t* data[1] = {(uint8_t *) &proxy_metrics.concurrent_connections};
+    if(hpcp_response(r->wb, r->response_status, 0x01, data_sizes, data) == -1) {
+        return ERROR;
+    }
     return COMAND_WRITE;
 }
 
-static unsigned get_historic_accesses(struct hpcp_request *request) {
+static unsigned get_historic_accesses(struct request_st *r) {
+    uint8_t data_sizes[1] = {0x08};
+    uint8_t* data[1] = {(uint8_t *) &proxy_metrics.historic_accesses};
+    if(hpcp_response(r->wb, r->response_status, 0x01, data_sizes, data) == -1) {
+        return ERROR;
+    }
     return COMAND_WRITE;
 }
 
-static unsigned get_transferred_bytes(struct hpcp_request *request) {
+static unsigned get_transferred_bytes(struct request_st *r) {
+    uint8_t data_sizes[1] = {0x08};
+    uint8_t* data[1] = {(uint8_t *) &proxy_metrics.transferred_bytes};
+    if(hpcp_response(r->wb, r->response_status, 0x01, data_sizes, data) == -1) {
+        return ERROR;
+    }
     return COMAND_WRITE;
 }
 
-static unsigned cmd_set_process(struct hpcp_request *request) {
+static unsigned cmd_set_process(struct request_st *r) {
+    struct hpcp_request *request = &r->request;
     if (request->nargs < CMD_SET_MIN_NARGS || request->args_sizes[0] != 0x01) {
         return ERROR;
     }
     switch (request->args[0][0]) {
         case CONFIGURATIONS:
-            return cmd_set_configurations_process(request);
+            return cmd_set_configurations_process(r);
         default:
             return ERROR;
     }
 }
 
-static unsigned cmd_set_configurations_process(struct hpcp_request *request) {
+
+static unsigned cmd_set_configurations_process(struct request_st *r) {
+    struct hpcp_request *request = &r->request;
     if (request->args_sizes[1] != 0x01) {
         return ERROR;
     }
     switch (request->args[1][0]) {
         case TRANSFORMATION_PROGRAM:
-            return set_transformation_program(request);
+            return set_transformation_program(r);
         case TRANSFORMATION_PROGRAM_STATUS:
-            return set_transformation_program_status(request);
+            return set_transformation_program_status(r);
         case MEDIA_TYPES:
-            return set_media_types(request);
+            return set_media_types(r);
         default:
             return ERROR;
     }
 }
 
-static unsigned set_transformation_program(struct hpcp_request *request) {
+static unsigned set_transformation_program(struct request_st *r) {
+    char transformation_program[r->request.args_sizes[2]];
+    memcpy(transformation_program, r->request.args[2], r->request.args_sizes[2]);
 
     return COMAND_WRITE;
 }
 
-static unsigned set_transformation_program_status(struct hpcp_request *request) {
+static unsigned set_transformation_program_status(struct request_st *r) {
     return COMAND_WRITE;
 }
 
-static unsigned set_media_types(struct hpcp_request *request) {
+static unsigned set_media_types(struct request_st *r) {
     return COMAND_WRITE;
 }
 
@@ -698,6 +769,7 @@ static const struct state_definition client_statbl[] = {
                 .state            = HELLO_READ,
                 .on_arrival       = hello_read_init,
                 .on_read_ready    = hello_read,
+                .on_departure     = on_read_departure,
         },
         {
                 .state            = HELLO_WRITE,
@@ -707,6 +779,7 @@ static const struct state_definition client_statbl[] = {
                 .state            = AUTH_READ,
                 .on_arrival       = auth_read_init,
                 .on_read_ready    = auth_read,
+                .on_departure     = on_read_departure,
         },
         {
                 .state            = AUTH_WRITE,
@@ -716,6 +789,7 @@ static const struct state_definition client_statbl[] = {
                 .state            = COMAND_READ,
                 .on_arrival       = cmd_read_init,
                 .on_read_ready    = cmd_read,
+                .on_departure     = on_read_departure,
         },
         {
                 .state            = COMAND_WRITE,

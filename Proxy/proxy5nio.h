@@ -2,8 +2,8 @@
 #define proxy5NIO_H_whVj9DjZzFKtzEUtC0Ma2Ae45Hm
 
 #include <netdb.h>
-#include "Utils/selector.h"
-#include "Parser/picohttpparser.h"
+#include "../Utils/selector.h"
+#include "Parsers/http_parser.h"
 
 /** handler del socket pasivo que atiende conexiones proxyv5 */
 void
