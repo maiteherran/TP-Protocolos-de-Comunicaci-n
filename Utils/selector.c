@@ -128,7 +128,7 @@ struct blocking_job {
 static const int FD_UNUSED = -1;
 
 /** verifica si el item está usado */
-#define ITEM_USED(i) ( ( FD_UNUSED != (i)->fd) )
+#define ITEM_USED(i) ( ( -1 != (i)->fd) )
 
 struct fdselector {
     // almacenamos en una jump table donde la entrada es el file descriptor.
@@ -480,17 +480,19 @@ handle_iteration(fd_selector s) {
                     }
                 }
             }
-//            time_t t = time(NULL);
-//            if (difftime(t, item->timestamp) >= 30) {
-//                /*
-//                 * si no se a registrado actividad en 90 segundos pasamos a liberaramos los recursos utilizados
-//                 * de esto se encarga la funicion registrada en timeout
-//                 */
-//                if (item->handler->handle_timeout != 0) {
-//                    log_warn("Connection in fd: %d has been closed for inactivity", item->fd);
-//                    item->handler->handle_timeout(&key);
-//                }
-//            }
+        }
+        if(ITEM_USED(item)) {
+            time_t t = time(NULL);
+            if (difftime(t, item->timestamp) >= 20) {
+                /*
+                 * si no se a registrado actividad en 90 segundos pasamos a liberaramos los recursos utilizados
+                 * de esto se encarga la funicion registrada en timeout
+                 */
+                if (item->handler->handle_timeout != NULL) {
+                    log_warn("Connection in fd: %d has been closed for inactivity", item->fd);
+                    item->handler->handle_timeout(&key);
+                }
+            }
         }
     }
 }

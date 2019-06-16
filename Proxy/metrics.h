@@ -13,7 +13,7 @@ typedef struct {
     unsigned long long transferred_bytes;
 } metrics;
 
-metrics proxy_metrics;
+//metrics proxy_metrics;
 
 
 #endif //PROBANDOTPPROTOS_METRICS_H

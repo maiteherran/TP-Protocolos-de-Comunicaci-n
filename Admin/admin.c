@@ -18,6 +18,7 @@
 #include "../Utils/log.h"
 #include "../Proxy/config.h"
 #include "../Proxy/metrics.h"
+#include "auth.h"
 
 #define N(x) (sizeof(x)/sizeof((x)[0]))
 #define MSG_NOSIGNAL       0x4000
@@ -38,8 +39,6 @@
 #define CONCURRENT_CONNECTIONS 0x01
 #define HISTORIC_ACCESSES 0x02
 #define TRANSFERRED_BYTES 0X04
-
-
 
 /** maquina de estados general */
 enum socks_v5state {
@@ -82,6 +81,8 @@ struct request_st {
     const int *client_fd;
 };
 
+extern metrics proxy_metrics;
+extern conf    proxy_configurations;
 
 /*
  * Si bien cada estado tiene su propio struct que le da un alcance
@@ -232,10 +233,11 @@ static void socksv5_block(struct selector_key *key);
 static void socksv5_close(struct selector_key *key);
 
 static const struct fd_handler socks5_handler = {
-        .handle_read   = socksv5_read,
-        .handle_write  = socksv5_write,
-        .handle_close  = socksv5_close,
-        .handle_block  = socksv5_block,
+        .handle_read    = socksv5_read,
+        .handle_write   = socksv5_write,
+        .handle_close   = socksv5_close,
+        .handle_block   = socksv5_block,
+        .handle_timeout = NULL,
 };
 
 /** Intenta aceptar la nueva conexión entrante*/
@@ -427,8 +429,13 @@ auth_process(struct selector_key *key, struct request_st *r) { // recivo error y
         printf("invalid hello args\n");
         return hpcp_request_error_invalid_args;
     }
-    buffer_write(buff, hpcp_status_ok);
-    buffer_write(buff, 0x00);
+    if (log_in((char *)r->request.args[0], r->request.args_sizes[0], (char *)r->request.args[1], r->request.args_sizes[1])) {
+        buffer_write(buff, hpcp_status_ok);
+        buffer_write(buff, 0x00);
+    } else {
+        buffer_write(buff, hpcp_status_invalid_credentials);
+        buffer_write(buff, 0x00);
+    }
     selector_set_interest_key(key, OP_WRITE);
     return AUTH_WRITE;
 }
@@ -715,10 +722,10 @@ static unsigned get_historic_accesses(struct request_st *r) {
     buff[2] = 4;
     buffer_write_adv(b, 3);
     // convert from an unsigned long int to a 4-byte array
-    buff[3] = (int)((proxy_metrics.concurrent_connections >> 24) & 0xFF) ;
-    buff[4] = (int)((proxy_metrics.concurrent_connections >> 16) & 0xFF) ;
-    buff[5] = (int)((proxy_metrics.concurrent_connections >> 8) & 0XFF);
-    buff[6] = (int)((proxy_metrics.concurrent_connections & 0XFF));
+    buff[3] = (int)((proxy_metrics.historic_accesses >> 24) & 0xFF) ;
+    buff[4] = (int)((proxy_metrics.historic_accesses >> 16) & 0xFF) ;
+    buff[5] = (int)((proxy_metrics.historic_accesses >> 8) & 0XFF);
+    buff[6] = (int)((proxy_metrics.historic_accesses & 0XFF));
     buffer_write_adv(b, 4);
 
     return COMAND_WRITE;
@@ -739,10 +746,10 @@ static unsigned get_transferred_bytes(struct request_st *r) {
     buff[2] = 4;
     buffer_write_adv(b, 3);
     // convert from an unsigned long int to a 4-byte array
-    buff[3] = (int)((proxy_metrics.concurrent_connections >> 24) & 0xFF) ;
-    buff[4] = (int)((proxy_metrics.concurrent_connections >> 16) & 0xFF) ;
-    buff[5] = (int)((proxy_metrics.concurrent_connections >> 8) & 0XFF);
-    buff[6] = (int)((proxy_metrics.concurrent_connections & 0XFF));
+    buff[3] = (int)((proxy_metrics.transferred_bytes >> 24) & 0xFF) ;
+    buff[4] = (int)((proxy_metrics.transferred_bytes >> 16) & 0xFF) ;
+    buff[5] = (int)((proxy_metrics.transferred_bytes >> 8) & 0XFF);
+    buff[6] = (int)((proxy_metrics.transferred_bytes & 0XFF));
     buffer_write_adv(b, 4);
 
     return COMAND_WRITE;

@@ -184,6 +184,10 @@ struct access_st {
     char response[256];
 };
 
+
+extern metrics proxy_metrics;
+extern conf proxy_configurations;
+
 /*
  * Si bien cada estado tiene su propio struct que le da un alcance
  * acotado, disponemos de la siguiente estructura para hacer una única
@@ -193,8 +197,6 @@ struct access_st {
  * liberarlo finalmente, y un pool para reusar alocaciones previas.
  */
 
-extern metrics proxy_metrics;
-extern conf    proxy_configurations;
 struct proxy5 {
     /** información del cliente */
     struct sockaddr_storage client_addr;
@@ -311,7 +313,6 @@ proxy5_destroy_(struct proxy5 *s) {
         freeaddrinfo(s->origin_resolution);
         s->origin_resolution = 0;
     }
-    proxy_metrics.concurrent_connections--;
     free(s);
 }
 
@@ -686,6 +687,7 @@ origin_read(struct selector_key *key) {
     ssize_t recv       = read(origin_fd, write_ptr, count);
     if (recv > 0) {
         buffer_write_adv(buff, recv);
+        proxy_metrics.transferred_bytes += recv;
     } else if (recv == 0) {
         /*
          * Seteamos "Conection: close" en el request al origin, seguramente el cierre su conexion al terminar de enviar
@@ -731,6 +733,7 @@ origin_write(struct selector_key *key) {
             n = write(origin_fd, read_ptr, (size_t) (eol - read_ptr) + 2);
             if (n >= 0) {
                 buffer_read_adv(buff, (eol - read_ptr) + 2);
+                proxy_metrics.transferred_bytes += n;
             } else {
                 log_error("Error en el origin server");
                 ret = O_ERROR;
@@ -742,6 +745,7 @@ origin_write(struct selector_key *key) {
                 log_error("Error en el origin server");
                 ret = O_ERROR;
             }
+            proxy_metrics.transferred_bytes += n;
             d->header_close_added = 1;
         }
         return ret;
@@ -750,6 +754,7 @@ origin_write(struct selector_key *key) {
     n = write(origin_fd, read_ptr, size);
     if (n > 0) {
         buffer_read_adv(buff, n);
+        proxy_metrics.transferred_bytes += n;
         //printf("%.*s", (int) size, read_ptr);
     } else if (n == 0) {
         log_debug("cerro escritura el origin");
@@ -1369,6 +1374,7 @@ proxyv5_close(struct selector_key *key) {
 static void
 proxyv5_done(struct selector_key *key) {
     log_access_wrapper(&ATTACHMENT(key)->access, (struct sockaddr *) &ATTACHMENT(key)->client_addr);
+    proxy_metrics.concurrent_connections--;
     log_debug("CONEXION CERRADA");
     const int     fds[] = {
             ATTACHMENT(key)->client_fd,

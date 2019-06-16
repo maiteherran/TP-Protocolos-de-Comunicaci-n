@@ -18,8 +18,8 @@
 #include "Proxy/metrics.h"
 #include "Proxy/config.h"
 
-extern metrics proxy_metrics;
-extern conf proxy_configurations;
+metrics proxy_metrics;
+conf proxy_configurations;
 
 int server_init(int port, int protocol, const struct fd_handler * handler);
 
@@ -194,5 +194,5 @@ void metrics_init() {
     proxy_configurations.media_types = NULL;
     proxy_configurations.transformation_on = 0;
     proxy_configurations.n_media_types = 0;
-    proxy_configurations.transformation_program = NULL;
+    proxy_configurations.transformation_program = "cat";
 }

@@ -1,7 +1,3 @@
-//
-// Created by Fermin Gomez on 6/13/19.
-//
-
 #ifndef PROBANDOTPPROTOS_COMANDS_H
 #define PROBANDOTPPROTOS_COMANDS_H
 
@@ -15,5 +11,5 @@ typedef struct {
     int n_media_types;
 } conf;
 
-conf proxy_configurations;
+//conf proxy_configurations;
 #endif //PROBANDOTPPROTOS_COMANDS_H
