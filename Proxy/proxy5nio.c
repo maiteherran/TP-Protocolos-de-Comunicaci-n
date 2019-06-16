@@ -31,6 +31,7 @@
 // Host: bar:9090
 // cerrar bien en request y response
 // header accept
+// media types transformables
 // escuchar las 2 bocas y poner un timer en el selector de 90s si nadie me mando nada cierro
 // cat | gzip -d | cat
 
