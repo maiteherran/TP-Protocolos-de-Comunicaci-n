@@ -811,6 +811,27 @@ static unsigned set_transformation_program_status(struct request_st *r) {
 }
 
 static unsigned set_media_types(struct request_st *r) {
+    buffer *b = r->wb;
+    size_t  n;
+    uint8_t *buff = buffer_write_ptr(b, &n);
+
+    int total_response_length = 2;
+    if(n < total_response_length) {
+        return -1;
+    }
+    char *aux = realloc(proxy_configurations.media_types, r->request.args_sizes[2]);
+    if (aux == NULL) {
+        r->response_status = hpcp_status_error;
+    } else {
+
+        proxy_configurations.media_types = aux;
+        memcpy(proxy_configurations.media_types, r->request.args[2], r->request.args_sizes[2]);
+        r->response_status = hpcp_status_ok;
+    }
+    buff[0] = r->response_status;
+    buff[1] = 0x00;
+
+    buffer_write_adv(b, total_response_length);
     return COMAND_WRITE;
 }
 
