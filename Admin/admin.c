@@ -616,27 +616,18 @@ static unsigned get_media_types(struct request_st *r) {
     size_t  n;
     uint8_t *buff = buffer_write_ptr(b, &n);
 
-    int total_response_length = 2;
+    int arglen = strlen(proxy_configurations.media_types);
+    int total_response_length = 2 + 1 + arglen; //minimo necesito 2 bytes para el response status y nresp, 1 para la longitud de la primer respuesta, sizeof(unisgned long long) para la respuesta
     if(n < total_response_length) {
         return -1;
     }
     buff[0] = r->response_status;
-    buff[1] = proxy_configurations.n_media_types;
-
-    int k = 2;
-    for (int j = 0 ; j < proxy_configurations.n_media_types ; j ++) {
-        int arglen = strlen(proxy_configurations.media_types[j]);
-        total_response_length += 1 + arglen; //1 para el arglen  y arglen para el arg
-        if(n < total_response_length) {
-            return -1;
-        }
-        buff[k++] = arglen;
-        for (int i = 0; i < arglen; i++) {
-            buff[k++] = (uint8_t) proxy_configurations.transformation_program[i];
-        }
-        buffer_write_adv(b, total_response_length);
+    buff[1] = 0x01;
+    buff[2] = arglen;
+    for (int i = 0; i < arglen; i++) {
+        buff[3 + i] = (uint8_t) proxy_configurations.media_types[i];
     }
-
+    buffer_write_adv(b, 3 + arglen);
     return COMAND_WRITE;
 }
 
