@@ -787,18 +787,52 @@ static unsigned cmd_set_configurations_process(struct request_st *r) {
 }
 
 static unsigned set_transformation_program(struct request_st *r) {
-    char *aux =  realloc(proxy_configurations.transformation_program, r->request.args_sizes[2] + 1);
-    proxy_configurations.transformation_program =
-    memcpy(proxy_configurations.transformation_program, r->request.args[2], r->request.args_sizes[2]);
+    buffer *b = r->wb;
+    size_t  n;
+    uint8_t *buff = buffer_write_ptr(b, &n);
 
+    int total_response_length = 2;
+    if(n < total_response_length) {
+        return -1;
+    }
+    char *aux = realloc(proxy_configurations.transformation_program, r->request.args_sizes[2]);
+    if (aux == NULL) {
+        r->response_status = hpcp_status_error;
+    } else {
 
-    char transformation_program[r->request.args_sizes[2] + 1];
-    memcpy(transformation_program, r->request.args[2], r->request.args_sizes[2]);
-    transformation_program[r->request.args_sizes[2]] = '\0';
+        proxy_configurations.transformation_program = aux;
+        memcpy(proxy_configurations.transformation_program, r->request.args[2], r->request.args_sizes[2]);
+        proxy_configurations.transformation_on = 0x01; // queda activo por defecto
+        r->response_status = hpcp_status_ok;
+    }
+    buff[0] = r->response_status;
+    buff[1] = 0x00;
+
+    buffer_write_adv(b, total_response_length);
     return COMAND_WRITE;
 }
 
 static unsigned set_transformation_program_status(struct request_st *r) {
+    buffer *b = r->wb;
+    size_t  n;
+    uint8_t *buff = buffer_write_ptr(b, &n);
+
+    int total_response_length = 2; //minimo necesito 2 bytes para el response status y nresp, 1 para la longitud de la primer respuesta, sizeof(unisgned long long) para la respuesta
+    if(n < total_response_length) {
+        return -1;
+    }
+
+    if (r->request.args[2][0] > 0x01) {
+        r->response_status = hpcp_status_error;
+    } else {
+        proxy_configurations.transformation_on = r->request.args[2][0];
+        r->response_status = hpcp_status_ok;
+    }
+
+    buff[0] = r->response_status;
+    buff[1] = 0x00;
+
+    buffer_write_adv(b, total_response_length);
     return COMAND_WRITE;
 }
 
