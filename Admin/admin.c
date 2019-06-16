@@ -647,10 +647,10 @@ static unsigned get_media_types(struct request_st *r) {
         return -1;
     }
     buff[0] = r->response_status;
-    buff[1] = proxy_configurations.n_media_types;
+    buff[1] = proxy_configurations.media_types;
 
     int k = 2;
-    for (int j = 0 ; j < proxy_configurations.n_media_types ; j ++) {
+    for (int j = 0 ; j < proxy_configurations.media_types ; j ++) {
         int arglen = strlen(proxy_configurations.media_types[j]);
         total_response_length += 1 + arglen; //1 para el arglen  y arglen para el arg
         if(n < total_response_length) {

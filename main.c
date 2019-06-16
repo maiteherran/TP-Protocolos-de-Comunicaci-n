@@ -193,6 +193,5 @@ void conf_init() {
 void metrics_init() {
     proxy_configurations.media_types = NULL;
     proxy_configurations.transformation_on = 0;
-    proxy_configurations.n_media_types = 0;
     proxy_configurations.transformation_program = NULL;
 }
