@@ -1,5 +1,5 @@
-#ifndef PROBANDOTPPROTOS_HTTP_CHUNK_DECODER_H
-#define PROBANDOTPPROTOS_HTTP_CHUNK_DECODER_H
+#ifndef TPPROTOS_HTTP_CHUNK_DECODER_H
+#define TPPROTOS_HTTP_CHUNK_DECODER_H
 
 #import <stdio.h>
 
@@ -24,4 +24,4 @@ struct phr_chunked_decoder {
 
 ssize_t decode_chunked(struct phr_chunked_decoder *decoder, char *buff, size_t *buff_size);
 
-#endif //PROBANDOTPPROTOS_HTTP_CHUNK_DECODER_H
+#endif //TPPROTOS_HTTP_CHUNK_DECODER_H

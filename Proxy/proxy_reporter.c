@@ -2,9 +2,9 @@
 
 struct report_t {
     int status_code;
-    const char * status_msg;
-    const char * headers;
-    const char * body;
+    const char *status_msg;
+    const char *headers;
+    const char *body;
 };
 
 static const struct report_t reports[] = {

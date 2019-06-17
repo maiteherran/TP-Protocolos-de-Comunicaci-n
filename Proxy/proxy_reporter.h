@@ -2,8 +2,8 @@
 // Created by Fermin Gomez on 6/9/19.
 //
 
-#ifndef PROBANDOTPPROTOS_PROXY_REPORTER_H
-#define PROBANDOTPPROTOS_PROXY_REPORTER_H
+#ifndef TPPROTOS_PROXY_REPORTER_H
+#define TPPROTOS_PROXY_REPORTER_H
 
 #include <stdio.h>
 
@@ -20,4 +20,4 @@ enum report {
 void
 report(int client_fd, enum report);
 
-#endif //PROBANDOTPPROTOS_PROXY_REPORTER_H
+#endif //TPPROTOS_PROXY_REPORTER_H

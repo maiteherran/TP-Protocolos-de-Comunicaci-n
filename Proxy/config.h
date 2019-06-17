@@ -1,5 +1,5 @@
-#ifndef PROBANDOTPPROTOS_COMANDS_H
-#define PROBANDOTPPROTOS_COMANDS_H
+#ifndef TPPROTOS_COMANDS_H
+#define TPPROTOS_COMANDS_H
 
 #include "../Utils/buffer.h"
 #include "../Admin/HpcpParser/hpcpRequest.h"
@@ -12,4 +12,4 @@ typedef struct {
 } conf;
 
 //conf proxy_configurations;
-#endif //PROBANDOTPPROTOS_COMANDS_H
+#endif //TPPROTOS_COMANDS_H

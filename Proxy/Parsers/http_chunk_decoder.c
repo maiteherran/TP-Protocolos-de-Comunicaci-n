@@ -117,7 +117,7 @@ decode_chunk_crlf(struct phr_chunked_decoder *decoder, char **src) {
 unsigned int
 decode_chunk_extension(struct phr_chunked_decoder *decoder, char **src) {
     char *c = *src;
-    if (*c == '\012') {
+    if (*c == '\n') {
         (*src)++;
         if (decoder->bytes_left_in_chunk == 0) {
             decoder->aux = 0;
@@ -151,7 +151,7 @@ unsigned int
 decode_chunk_trailer_field(struct phr_chunked_decoder *decoder, char **src) {
     // me salteo el contenido hasta encontrar el final, entonces pasamos a verificar que no haya mas nada por recibir, (si encontramos el '\r\n' final)
     char *c = *src;
-    if (*c == '\012') {
+    if (*c == '\n') {
         (*src)++;
         decoder->aux = 0;
         return CHUNK_TRAILER_CRLF;

@@ -115,11 +115,13 @@ buffer_compact(buffer *b, int on_off);
  */
 uint8_t *
 buffer_write_ptr(buffer *b, size_t *nbyte);
+
 void
 buffer_write_adv(buffer *b, const ssize_t bytes);
 
 uint8_t *
 buffer_read_ptr(buffer *b, size_t *nbyte);
+
 void
 buffer_read_adv(buffer *b, const ssize_t bytes);
 

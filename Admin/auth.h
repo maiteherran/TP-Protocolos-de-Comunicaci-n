@@ -1,5 +1,5 @@
-#ifndef PROBANDOTPPROTOS_AUTH_H
-#define PROBANDOTPPROTOS_AUTH_H
+#ifndef TPPROTOS_AUTH_H
+#define TPPROTOS_AUTH_H
 
 #include <stdio.h>
 
@@ -8,10 +8,10 @@
  * Se podria guardar la tupla (user, pass) en una estructura
  */
 
-static const char * user = "admin";
-static const char * pass = "admin";
+static const char *user = "admin";
+static const char *pass = "admin";
 
 int
-log_in(char * username, size_t user_size, char * password, size_t pass_size);
+log_in(char *username, size_t user_size, char *password, size_t pass_size);
 
-#endif //PROBANDOTPPROTOS_AUTH_H
+#endif //TPPROTOS_AUTH_H

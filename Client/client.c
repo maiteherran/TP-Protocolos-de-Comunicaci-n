@@ -1,46 +1,75 @@
 #include "client.h"
 
-static bool done = false;
-static char * address = DEF_ADDRESS;
-static uint16_t port = DEF_PORT;
-static uint8_t version = DEF_VERSION;
-static uint8_t sub_version = DEF_SUB_VERS;
-static char buffer[MAX_BUFFER];
-static struct addrinfo * addr_info;
-static int socket_fd;
-static bool logged = false;
-static char * username;
-static char * password;
+static bool            done        = false;
+static char            *address    = DEF_ADDRESS;
+static uint16_t        port        = DEF_PORT;
+static uint8_t         version     = DEF_VERSION;
+static uint8_t         sub_version = DEF_SUB_VERS;
+static char            buffer[MAX_BUFFER];
+static struct addrinfo *addr_info;
+static int             socket_fd;
+static bool            logged      = false;
+static char            *username;
+static char            *password;
 
-static uint16_t parse_port (const char *port);
+static uint16_t parse_port(const char *port);
+
 static void show_options();
+
 static void set_up_server(int argc, char **argv);
+
 static bool get_address(const char *address, uint16_t port, struct addrinfo **addr_info_res);
-static bool get_auth(const char * username, const char * password);
+
+static bool get_auth(const char *username, const char *password);
+
 static void show_commands();
+
 static void get_configurations();
+
 static void get_metrics();
+
 static void set_configurations();
+
 static void quit();
-static void show_datagram(uint8_t * datagram, unsigned size);
+
+static void show_datagram(uint8_t *datagram, unsigned size);
+
 static void show_error(uint8_t error_code);
+
 static void get_transformation_program();
+
 static void get_transformation_status();
+
 static void get_media_types();
+
 static void get_concurrent_connections();
+
 static void get_historical_accesses();
+
 static void get_transferred_bytes();
-static void get_metric (uint8_t metric);
+
+static void get_metric(uint8_t metric);
+
 static void set_transformation_program();
+
 static void set_transformation_status();
+
 static void set_media_types();
+
 static void log_in();
+
 static void get_command();
+
 static bool hello();
+
 static void parse_version(const char *optarg);
-static void init_connection (int argc, char *argv[], bool already_initiated);
-static void restart_connection ();
+
+static void init_connection(int argc, char *argv[], bool already_initiated);
+
+static void restart_connection();
+
 static void show_connection_error();
+
 static void free_resources();
 
 // TODO: liberar todos los recursos, incluso en caso de error
@@ -70,7 +99,7 @@ int main(int argc, char *argv[]) {
     exit(EXIT_SUCCESS);
 }
 
-static void init_connection (int argc, char *argv[], bool already_initiated) {
+static void init_connection(int argc, char *argv[], bool already_initiated) {
 
     if (!already_initiated) {
 
@@ -84,7 +113,7 @@ static void init_connection (int argc, char *argv[], bool already_initiated) {
         /**
          * Obtenemos la dirección del administrador del server
          */
-        if ( !get_address(address, port, &addr_info) ) {
+        if (!get_address(address, port, &addr_info)) {
             fprintf(stderr, "Error: could not resolve address %s:%hu", address, port);
             exit(EXIT_FAILURE);
         }
@@ -95,7 +124,8 @@ static void init_connection (int argc, char *argv[], bool already_initiated) {
      */
     socket_fd = socket(addr_info->ai_family, SOCK_STREAM, IPPROTO_SCTP);
     if (socket_fd < 0) {
-        fprintf(stderr, "Error: could not create communication with the server at %s:%hu.\n%s", address, port, strerror(errno));      // todo: esta bien el mensaje?
+        fprintf(stderr, "Error: could not create communication with the server at %s:%hu.\n%s", address, port,
+                strerror(errno));      // todo: esta bien el mensaje?
         exit(EXIT_FAILURE);
     }
 
@@ -103,7 +133,8 @@ static void init_connection (int argc, char *argv[], bool already_initiated) {
      * Tratamos de conectarnos con el server
      */
     if (connect(socket_fd, addr_info->ai_addr, addr_info->ai_addrlen) < 0) {
-        fprintf(stderr, "Error: could not connect with the server at %s:%hu.", address, port);                   // todo: esta bien el mensaje?
+        fprintf(stderr, "Error: could not connect with the server at %s:%hu.", address,
+                port);                   // todo: esta bien el mensaje?
         exit(EXIT_FAILURE);
     }
 
@@ -115,7 +146,7 @@ static void init_connection (int argc, char *argv[], bool already_initiated) {
 
 }
 
-static void restart_connection () {
+static void restart_connection() {
 
     /** Intentamos reconectarnos con el server
      * Si hay algún error va a ocurrir un exit
@@ -132,11 +163,11 @@ static void restart_connection () {
 static bool hello() {
 
     uint8_t cmd, n_args, arglen1, arg1, arg2, datagram[MAX_DATAGRAM], resp[MAX_DATAGRAM];
-    cmd = HELLO_CMD;
-    n_args = 1;
+    cmd     = HELLO_CMD;
+    n_args  = 1;
     arglen1 = 2;
-    arg1 = version;
-    arg2 = sub_version;
+    arg1    = version;
+    arg2    = sub_version;
 
     datagram[0] = cmd;
     datagram[1] = n_args;
@@ -188,7 +219,7 @@ static void log_in() {
         printf("Please enter your password\n");
     }
 
-    if (!logged){
+    if (!logged) {
         exit(EXIT_FAILURE);
     }
 
@@ -236,7 +267,7 @@ static void set_up_server(int argc, char **argv) {
 
     int c;
 
-    while ( (c = getopt(argc, argv, ":L:o:v:")) != -1 ) {
+    while ((c = getopt(argc, argv, ":L:o:v:")) != -1) {
         switch (c) {
             case 'L':
                 address = malloc(strlen(optarg) + 1);
@@ -266,7 +297,7 @@ static void parse_version(const char *optarg) {
     sscanf(optarg, "%hhu.%hhu", &version, &sub_version);
 }
 
-static uint16_t parse_port (const char * port) {
+static uint16_t parse_port(const char *port) {
 
     if (*port == '-') {
         fprintf(stderr, "Error: '-p' argument %s must be positive\n", port);
@@ -275,14 +306,14 @@ static uint16_t parse_port (const char * port) {
 
     int res = 0;
 
-    while ( isdigit(*port) ) {
-        res = res*10 + (*port++ - '0');
+    while (isdigit(*port)) {
+        res = res * 10 + (*port++ - '0');
     }
 
-    if ( *port != '\0' && !isdigit(*port) ) {
+    if (*port != '\0' && !isdigit(*port)) {
         fprintf(stderr, "Error: '-p' argument %s is not an integer\n", port);
         exit(EXIT_FAILURE);
-    } else if ( res < MIN_PORT || res > MAX_PORT ) {
+    } else if (res < MIN_PORT || res > MAX_PORT) {
         fprintf(stderr, "Error: '-p' argument %s is not an integer between %u and %u\n", port, MIN_PORT, MAX_PORT);
         exit(EXIT_FAILURE);
     }
@@ -311,7 +342,7 @@ static bool get_address(const char *address, uint16_t port, struct addrinfo **ad
 static bool get_auth(const char *username, const char *password) {
 
     uint8_t cmd, n_args, arglen1, arglen2, datagram[MAX_DATAGRAM], resp[MAX_DATAGRAM];
-    cmd = AUTH_CMD;
+    cmd    = AUTH_CMD;
     n_args = 2;
 
     if (strlen(username) > 255) {
@@ -438,14 +469,14 @@ static void get_concurrent_connections() {
     get_metric(GET_CONN);
 }
 
-static void get_metric (uint8_t metric) {
+static void get_metric(uint8_t metric) {
     uint8_t cmd, n_args, arglen1, arg1, arglen2, arg2, datagram[MAX_DATAGRAM], resp[MAX_DATAGRAM];
-    cmd = GET_CMD;
-    arg1 = GET_METRICS;
-    arg2 = metric;
+    cmd     = GET_CMD;
+    arg1    = GET_METRICS;
+    arg2    = metric;
     arglen1 = 1;
     arglen2 = 1;
-    n_args = 2;
+    n_args  = 2;
     datagram[0] = cmd;
     datagram[1] = n_args;
     datagram[2] = arglen1;
@@ -478,18 +509,22 @@ static void get_metric (uint8_t metric) {
     if (resp[0] == 0) {
 
         uint64_t acum = 0;
-        for (int i = 0 ; i < resp[2]; i++){
+        for (int i    = 0; i < resp[2]; i++) {
             acum += (resp[3 + i] << (8 * i));
         }
 
-        switch(metric) {
-            case GET_CONN: printf("Concurrent connections: %llu\n", acum);
+        switch (metric) {
+            case GET_CONN:
+                printf("Concurrent connections: %llu\n", acum);
                 break;
-            case GET_HIST: printf("Historical accesses: %llu\n", acum);
+            case GET_HIST:
+                printf("Historical accesses: %llu\n", acum);
                 break;
-            case GET_BYTES: printf("Transferred bytes: %llu\n", acum);
+            case GET_BYTES:
+                printf("Transferred bytes: %llu\n", acum);
                 break;
-            default: printf("Metric #%hhu: %llu\n", metric, acum);
+            default:
+                printf("Metric #%hhu: %llu\n", metric, acum);
                 break;
         }
 
@@ -534,23 +569,23 @@ static void set_media_types() {
 
     uint8_t cmd, n_args, arglen1, arg1, arglen2, arg2, arglen3, datagram[MAX_DATAGRAM], resp[MAX_DATAGRAM];
 
-    cmd = SET_CMD;
-    arg1 = SET_CONF;
-    arg2 = SET_MEDIA;
+    cmd     = SET_CMD;
+    arg1    = SET_CONF;
+    arg2    = SET_MEDIA;
     arglen1 = 1;
     arglen2 = 1;
-    n_args = 2;
+    n_args  = 2;
     datagram[0] = cmd;
     datagram[2] = arglen1;
     datagram[3] = arg1;
     datagram[4] = arglen2;
     datagram[5] = arg2;
-    int index = 6;
-    unsigned size = 6;
+    int      index = 6;
+    unsigned size  = 6;
 
-    while ( fgets(buffer, sizeof(buffer), stdin) != NULL && buffer[0] != 'q') {
+    while (fgets(buffer, sizeof(buffer), stdin) != NULL && buffer[0] != 'q') {
 
-        if (strlen(buffer) > 255 ) {
+        if (strlen(buffer) > 255) {
             printf("Please enter a shorter type.\n");
             return;
         }
@@ -559,7 +594,7 @@ static void set_media_types() {
         datagram[index++] = arglen3;
 
         for (int i = 0; i < strlen(buffer) + 1 && buffer[i] != ' '; i++) {
-            datagram[index + i] = (uint8_t ) buffer[i];
+            datagram[index + i] = (uint8_t) buffer[i];
         }
 
         n_args++;
@@ -610,14 +645,14 @@ static void set_transformation_status() {
         }
 
         uint8_t cmd, n_args, arglen1, arg1, arglen2, arg2, arglen3, arg3, datagram[MAX_DATAGRAM], resp[MAX_DATAGRAM];
-        cmd = SET_CMD;
-        arg1 = SET_CONF;
-        arg2 = SET_TRANSF_STAT;
-        arg3 = (uint8_t) ul;
+        cmd     = SET_CMD;
+        arg1    = SET_CONF;
+        arg2    = SET_TRANSF_STAT;
+        arg3    = (uint8_t) ul;
         arglen1 = 1;
         arglen2 = 1;
         arglen3 = 1;
-        n_args = 3;
+        n_args  = 3;
         datagram[0] = cmd;
         datagram[1] = n_args;
         datagram[2] = arglen1;
@@ -663,19 +698,19 @@ static void set_transformation_program() {
 
     if (fgets(buffer, sizeof(buffer), stdin) != NULL) {
 
-        if (strlen(buffer) > 255 ) {
+        if (strlen(buffer) > 255) {
             printf("Please enter a shorter name.\n");
             return;
         }
 
         uint8_t cmd, n_args, arglen1, arg1, arglen2, arg2, arglen3, datagram[MAX_DATAGRAM], resp[MAX_DATAGRAM];
-        cmd = SET_CMD;
-        arg1 = SET_CONF;
-        arg2 = SET_TRANSF_PRGM;
+        cmd     = SET_CMD;
+        arg1    = SET_CONF;
+        arg2    = SET_TRANSF_PRGM;
         arglen1 = 1;
         arglen2 = 1;
         arglen3 = (uint8_t) (strlen(buffer) + 1); // agregamos el '\0' final
-        n_args = 3;
+        n_args  = 3;
         datagram[0] = cmd;
         datagram[1] = n_args;
         datagram[2] = arglen1;
@@ -684,7 +719,7 @@ static void set_transformation_program() {
         datagram[5] = arg2;
         datagram[6] = arglen3;
         for (int i = 0; i < strlen(buffer) + 1 && buffer[i] != ' '; i++) {
-            datagram[7 + i] = (uint8_t ) buffer[i];
+            datagram[7 + i] = (uint8_t) buffer[i];
         }
 
         show_datagram(datagram, (unsigned) (7 + arglen3));
@@ -721,7 +756,7 @@ static void set_transformation_program() {
 static void quit() {
 
     uint8_t cmd, n_args, datagram[MAX_DATAGRAM], resp[MAX_DATAGRAM];
-    cmd = CLOSE_CMD;
+    cmd    = CLOSE_CMD;
     n_args = 0;
 
     datagram[0] = cmd;
@@ -752,12 +787,12 @@ static void quit() {
 
 static void get_transformation_program() {
     uint8_t cmd, n_args, arglen1, arg1, arglen2, arg2, datagram[MAX_DATAGRAM], resp[MAX_DATAGRAM];
-    cmd = GET_CMD;
-    arg1 = GET_CONF;
-    arg2 = GET_TRANSF_PRGM;
+    cmd     = GET_CMD;
+    arg1    = GET_CONF;
+    arg2    = GET_TRANSF_PRGM;
     arglen1 = 1;
     arglen2 = 1;
-    n_args = 2;
+    n_args  = 2;
     datagram[0] = cmd;
     datagram[1] = n_args;
     datagram[2] = arglen1;
@@ -797,7 +832,7 @@ static void get_transformation_program() {
     }
 
     if (resp[0] == 0) {
-        char * name = malloc(resp[2] + 1);
+        char *name = malloc(resp[2] + 1);
         memcpy(name, resp + 3, resp[2]);
         printf("Transformation program: %s\n", name);
         free(name);
@@ -808,12 +843,12 @@ static void get_transformation_program() {
 
 static void get_transformation_status() {
     uint8_t cmd, n_args, arglen1, arg1, arglen2, arg2, datagram[MAX_DATAGRAM], resp[MAX_DATAGRAM];
-    cmd = GET_CMD;
-    arg1 = GET_CONF;
-    arg2 = GET_TRANSF_STAT;
+    cmd     = GET_CMD;
+    arg1    = GET_CONF;
+    arg2    = GET_TRANSF_STAT;
     arglen1 = 1;
     arglen2 = 1;
-    n_args = 2;
+    n_args  = 2;
     datagram[0] = cmd;
     datagram[1] = n_args;
     datagram[2] = arglen1;
@@ -841,7 +876,7 @@ static void get_transformation_status() {
 
     if (resp[0] == 0) {
         printf("Transformation program: ");
-        if (resp[3]){
+        if (resp[3]) {
             printf("active\n");
         } else {
             printf("inactive\n");
@@ -853,12 +888,12 @@ static void get_transformation_status() {
 
 static void get_media_types() {
     uint8_t cmd, n_args, arglen1, arg1, arglen2, arg2, datagram[MAX_DATAGRAM], resp[MAX_DATAGRAM];
-    cmd = GET_CMD;
-    arg1 = GET_CONF;
-    arg2 = GET_MEDIA;
+    cmd     = GET_CMD;
+    arg1    = GET_CONF;
+    arg2    = GET_MEDIA;
     arglen1 = 1;
     arglen2 = 1;
-    n_args = 2;
+    n_args  = 2;
     datagram[0] = cmd;
     datagram[1] = n_args;
     datagram[2] = arglen1;
@@ -898,8 +933,8 @@ static void get_media_types() {
     if (resp[0] == 0) {
         int pos = 0;
         printf("Media types:\n");
-        char * aux = malloc(ARG_LEN_MAX);
-        for (int i = 0; i < resp[1]; i++) {
+        char     *aux = malloc(ARG_LEN_MAX);
+        for (int i    = 0; i < resp[1]; i++) {
             memcpy(aux, resp + 3 + i + pos, resp[pos + 2 + i]);
             aux[resp[pos + 2 + i]] = '\0';
             printf("%s\n", aux);
@@ -911,7 +946,7 @@ static void get_media_types() {
     }
 }
 
-static void show_datagram(uint8_t * datagram, unsigned size) {
+static void show_datagram(uint8_t *datagram, unsigned size) {
 
     printf("DATAGRAM:\n");
     for (int i = 0; i < size; i++) {
@@ -920,9 +955,9 @@ static void show_datagram(uint8_t * datagram, unsigned size) {
     printf("\n");
 }
 
-static void show_error (uint8_t error_code) {
+static void show_error(uint8_t error_code) {
 
-    switch(error_code) {
+    switch (error_code) {
         case 1:
             printf("Error: Try again.\n");
             break;

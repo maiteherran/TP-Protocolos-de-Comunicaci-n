@@ -55,10 +55,11 @@ int check_host_in_url(struct request_parser *p) {
 void
 get_host_and_port_(struct request_parser *p) {
     char aux[BUFFER_SIZE];
-    int port;
+    int  port;
     if (sscanf(p->request->host, "%[^:]:%d", aux, &port) == 2) {
         p->request->port = port;
-    } else if (sscanf(p->request->host, "%[^:]", aux) == 1) {  // no hay puerto, solo host. Tomamos como default el puerto 80
+    } else if (sscanf(p->request->host, "%[^:]", aux) ==
+               1) {  // no hay puerto, solo host. Tomamos como default el puerto 80
         p->request->port = 80;
     }
     strcpy(p->request->host, aux);
@@ -205,7 +206,7 @@ spaces_before_url(const uint8_t c, struct request_parser *p) {
             next = request_spaces_before_url;
             break;
         default: // encontre un caracter, debe ser parte de la url
-            remaining_set(p, BUFFER_SIZE); //TODO: este bufffer siza
+            remaining_set(p, BUFFER_SIZE);
             next = url(c, p);
     }
     return next;

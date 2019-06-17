@@ -1,11 +1,15 @@
 #include "server_arguments.h"
 
-static server_args_ptr args;
+server_args_ptr args;
 
 static void show_options();
+
 static void init_args();
+
 static void parse_version(const char *optarg);
-static uint16_t parse_port (const char * port);
+
+static uint16_t parse_port(const char *port);
+
 static void print_arguments();
 
 server_args_ptr read_arguments(int argc, const char *argv[]) {
@@ -14,7 +18,7 @@ server_args_ptr read_arguments(int argc, const char *argv[]) {
 
     int c;
 
-    while ( (c = getopt(argc, argv, ":e:h:l:L:M:o:p:t:v:")) != -1 ) {
+    while ((c = getopt(argc, argv, ":e:h:l:L:M:o:p:t:v:")) != -1) {
         switch (c) {
             case 'e':
                 args->error_file = malloc(strlen(optarg) + 1);
@@ -49,7 +53,8 @@ server_args_ptr read_arguments(int argc, const char *argv[]) {
                 printf("Version: %hhu.%hhu\n", args->version, args->sub_version);
                 exit(EXIT_SUCCESS);
             case '?':
-                if (optopt == 'e' || optopt == 'l' || optopt == 'L' || optopt == 'M' || optopt == 'o' || optopt == 'p' || optopt == 't') {
+                if (optopt == 'e' || optopt == 'l' || optopt == 'L' || optopt == 'M' || optopt == 'o' ||
+                    optopt == 'p' || optopt == 't') {
                     fprintf(stderr, "Error: Option -%c requires an argument\n", optopt);
                     exit(EXIT_FAILURE);
                 } else {
@@ -71,25 +76,23 @@ static void init_args() {
 
     args = malloc(sizeof(server_args));
 
-    args->http_address = DEF_HTTP_ADDRESS;
+    args->http_address  = DEF_HTTP_ADDRESS;
     args->admin_address = DEF_ADMIN_ADDRESS;
-    args->admin_port = DEF_ADMIN_PORT;
-    args->http_port = DEF_HTTP_PORT;
-    args->error_file = DEF_ERROR_FILE;
-    args->version = DEF_VERSION;
-    args->sub_version = DEF_SUB_VERS;
-    args->cmd = NULL; // vacio o en null?
-    args->media_types = NULL; // vacio o en null?
+    args->admin_port    = DEF_ADMIN_PORT;
+    args->http_port     = DEF_HTTP_PORT;
+    args->error_file    = DEF_ERROR_FILE;
+    args->version       = DEF_VERSION;
+    args->sub_version   = DEF_SUB_VERS;
+    args->cmd           = NULL; // vacio o en null?
+    args->media_types   = NULL; // vacio o en null?
 }
-
-//todo: hacer extern las funciones de parse_version y parse_port del client para reutilizarlas
 
 static void parse_version(const char *optarg) {
 
     sscanf(optarg, "%hhu.%hhu", &args->version, &args->sub_version);
 }
 
-static uint16_t parse_port (const char * port) {
+static uint16_t parse_port(const char *port) {
 
     if (*port == '-') {
         fprintf(stderr, "Error: '-p' argument %s must be positive\n", port);
@@ -98,14 +101,14 @@ static uint16_t parse_port (const char * port) {
 
     int res = 0;
 
-    while ( isdigit(*port) ) {
-        res = res*10 + (*port++ - '0');
+    while (isdigit(*port)) {
+        res = res * 10 + (*port++ - '0');
     }
 
-    if ( *port != '\0' && !isdigit(*port) ) {
+    if (*port != '\0' && !isdigit(*port)) {
         fprintf(stderr, "Error: '-p' argument %s is not an integer\n", port);
         exit(EXIT_FAILURE);
-    } else if ( res < MIN_PORT || res > MAX_PORT ) {
+    } else if (res < MIN_PORT || res > MAX_PORT) {
         fprintf(stderr, "Error: '-p' argument %s is not an integer between %u and %u\n", port, MIN_PORT, MAX_PORT);
         exit(EXIT_FAILURE);
     }

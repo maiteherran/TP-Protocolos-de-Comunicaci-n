@@ -10,5 +10,5 @@ strncpy_(char *dst, char *src, int srcsize, int dstsize) {
         to_cpy = srcsize;
     }
     memcpy(dst, src, to_cpy);
-    *(dst + to_cpy +1) = '\0';
+    *(dst + to_cpy + 1) = '\0';
 }

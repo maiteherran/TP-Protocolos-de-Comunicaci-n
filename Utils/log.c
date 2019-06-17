@@ -1,22 +1,22 @@
 #include "log.h"
 
-static const char * types[] = {
+static const char *types[] = {
         "ACCES", "WARN", "ERROR", "DEBUG"
 };
 
-static const char * files[] = {
+static const char *files[] = {
         "logs/acces.log", "logs/warning.log", "logs/error.log", "logs/debug.log"
 };
 
 
 static struct logger_t {
-    int     on;
-    int     fds[DEBUG+1];
-} l;
+    int on;
+    int fds[DEBUG + 1];
+}                 l;
 
 void logger_init() {
-    l.on = 1;
-    for(int i = 0; i < DEBUG+1; i++) {
+    l.on       = 1;
+    for (int i = 0; i < DEBUG + 1; i++) {
         l.fds[i] = open(files[i], O_RDWR | O_CREAT);
     }
 }
@@ -29,7 +29,7 @@ void logger_on() {
     l.on = 1;
 }
 
-void logger(int fd, const char * type ,const char *fmt, va_list args) {
+void logger(int fd, const char *type, const char *fmt, va_list args) {
     time_t now;
     time(&now);
     char *date = ctime(&now);
@@ -45,7 +45,7 @@ void logger(int fd, const char * type ,const char *fmt, va_list args) {
 }
 
 void log_error(const char *fmt, ...) {
-    if (!l.on) { return;}
+    if (!l.on) { return; }
     va_list args;
     va_start(args, fmt);
     logger(l.fds[ERR], types[ERR], fmt, args);
@@ -53,7 +53,7 @@ void log_error(const char *fmt, ...) {
 }
 
 void log_acces(const char *fmt, ...) {
-    if (!l.on) { return;}
+    if (!l.on) { return; }
     va_list args;
     va_start(args, fmt);
     logger(l.fds[ERR], types[ACC], fmt, args);
@@ -61,7 +61,7 @@ void log_acces(const char *fmt, ...) {
 }
 
 void log_debug(const char *fmt, ...) {
-    if (!l.on) { return;}
+    if (!l.on) { return; }
     va_list args;
     va_start(args, fmt);
     logger(l.fds[ERR], types[DEBUG], fmt, args);
@@ -69,7 +69,7 @@ void log_debug(const char *fmt, ...) {
 }
 
 void log_warn(const char *fmt, ...) {
-    if (!l.on) { return;}
+    if (!l.on) { return; }
     va_list args;
     va_start(args, fmt);
     logger(l.fds[ERR], types[WARN], fmt, args);

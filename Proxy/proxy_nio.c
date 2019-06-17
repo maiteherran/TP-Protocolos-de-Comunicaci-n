@@ -15,26 +15,26 @@
 #include "../Utils/stm.h"
 #include "Parsers/http_chunk_decoder.h"
 #include "Parsers/http_parser.h"
-#include "proxy5nio.h"
+#include "proxy_nio.h"
 #include "proxy_reporter.h"
 #include "../Utils/log.h"
 #include "metrics.h"
 #include "config.h"
 #include "../Utils/netutils.h"
 #include "../Utils/string_utils.h"
+#include "../Utils/server_arguments.h"
 
 #define N(x) (sizeof(x)/sizeof((x)[0]))
 #define BUFFER_SIZE 4096
 #define MSG_NOSIGNAL       0x4000
 
-// lista:
-// ejecuto 2 transformaciones seguidas la segunda no termina
-// cerrar bien en request y response, si se produce error en el programa transformador abortar, ver como
-// header accept
-// cat | gzip -d | cat
+/*
+ * Comando util para ungzip
+ * cat | gzip -d | cat
+ */
 
 /** maquina de estados general */
-enum proxy_v5state {
+enum proxy_client_state {
     /*
      * Recibe el request http del cliente, lo parsea hasta encontrar el host a donde debe conectarse
      *
@@ -54,9 +54,12 @@ enum proxy_v5state {
      */
             REQUEST_RESOLV,
     /*
-     *
+     * Realiza la comunicacion con el cliente
      *
      * Transiciones:
+     * TRANSFORM si se desea transformar el body de la respuesta al cliente
+     * COPY_BODY si no hay transformacion en el body de la respuesta al cliente
+     * ERROR error en la conexion
      */
             C_COMUNICATE,
     /*
@@ -76,7 +79,7 @@ enum proxy_v5state {
      */
             COPY_BODY,
     /*
-     * Proxy realizado, procedemos a cerrar las conneciones y liberar recursos
+     * Proxy realizado, procedemos a cerrar las conexiones y liberar recursos
      *
      * Transiciones:
      * ninguna
@@ -91,39 +94,41 @@ enum proxy_v5state {
             ERROR
 };
 
-enum proxy_v5_origin_state {
-    CONNECTING,
+enum proxy_origin_state {
     /*
-     *
+     * Conexion propiamente dicha
      *
      * Transiciones:
+     * OCOMUNICATE para comenzar la comunicacion
+     * O_ERROR no se pudo conectar
      */
-    O_COMUNICATE,
+            CONNECTING,
     /*
-     *
+     * Realiza la comunicacion con el origin server
      *
      * Transiciones:
+     * O_DONE
+     * O_ERROR error en la conexion
      */
-    O_DONE,
+            O_COMUNICATE,
     /*
-     *
+     * Proxy realizado, procedemos a cerrar las conexiones y liberar recursos
      *
      * Transiciones:
+     * ninguna
      */
-    O_ERROR
+            O_DONE,
+    /*
+     * Si se presenta algun error terminamos en este estado, se cierran las conexiones y se liberan recursos
+     *
+     * Transiciones:
+     * ninguna
+     */
+            O_ERROR
 };
 
 ////////////////////////////////////////////////////////////////////
 // Definición de variables para cada estado
-
-//struct t_request {
-//    char              *method, *path, *host, *body;
-//    int               version, body_len;
-//    struct phr_header *headers;
-//    size_t            num_headers;
-//    size_t            bad_request;
-//    size_t            port;
-//};
 
 struct request_st {
     /** buffer utilizado para I/O */
@@ -153,6 +158,8 @@ enum response_state {
 struct response_st {
     enum response_state state;
     int                 response_done;
+    int                 transformation_on;
+    int                 chunked_set;
     const int           *client_fd;
     int                 *origin_fd;
 };
@@ -174,8 +181,9 @@ struct access_st {
 };
 
 
-extern metrics proxy_metrics;
-extern conf    proxy_configurations;
+extern metrics         proxy_metrics;
+extern conf            proxy_configurations;
+extern server_args_ptr args;
 
 /*
  * Si bien cada estado tiene su propio struct que le da un alcance
@@ -213,9 +221,6 @@ struct proxy5 {
     struct transform_st transform;
     struct response_st  response;
     struct access_st    access;
-
-    int transformation_on; // TODO: por ahora esta aca en una varible y me fijo en response si entro o no
-    int chunked_set;
 
     /** buffers para ser usados read_buffer, write_buffer.*/
     uint8_t raw_buff_a[BUFFER_SIZE], raw_buff_b[BUFFER_SIZE];
@@ -285,9 +290,6 @@ proxy5_new(int client_fd) {
     buffer_init(&ret->write_buffer, N(ret->raw_buff_b), ret->raw_buff_b);
     buffer_compact(&ret->read_buffer, 0);
 
-    ret->transformation_on = proxy_configurations.transformation_on;
-    ret->chunked_set       = 0;
-
     ret->references = 1;
     proxy_metrics.historic_accesses++;
     proxy_metrics.concurrent_connections++;
@@ -327,7 +329,7 @@ proxy5_destroy(struct proxy5 *s) {
 }
 
 void
-proxyv5_pool_destroy(void) {
+proxy_pool_destroy(void) {
     struct proxy5 *next, *s;
     for (s = pool; s != NULL; s = next) {
         next = s->next;
@@ -341,27 +343,27 @@ proxyv5_pool_destroy(void) {
 /* declaración forward de los handlers de selección de una conexión
  * establecida entre un cliente y el proxy.
  */
-static void proxyv5_read(struct selector_key *key);
+static void proxy_read(struct selector_key *key);
 
-static void proxyv5_write(struct selector_key *key);
+static void proxy_write(struct selector_key *key);
 
-static void proxyv5_block(struct selector_key *key);
+static void proxy_block(struct selector_key *key);
 
-static void proxyv5_close(struct selector_key *key);
+static void proxy_close(struct selector_key *key);
 
-static void proxyv5_done(struct selector_key *key);
+static void proxy_done(struct selector_key *key);
 
 static const struct fd_handler proxy5_handler = {
-        .handle_read    = proxyv5_read,
-        .handle_write   = proxyv5_write,
-        .handle_close   = proxyv5_close,
-        .handle_block   = proxyv5_block,
-        .handle_timeout = proxyv5_done,
+        .handle_read    = proxy_read,
+        .handle_write   = proxy_write,
+        .handle_close   = proxy_close,
+        .handle_block   = proxy_block,
+        .handle_timeout = proxy_done,
 };
 
 /** Intenta aceptar la nueva conexión entrante*/
 void
-proxyv5_passive_accept(struct selector_key *key) {
+proxy_passive_accept(struct selector_key *key) {
     struct sockaddr_storage client_addr;
     socklen_t               client_addr_len = sizeof(client_addr);
     struct proxy5           *state          = NULL;
@@ -757,9 +759,11 @@ client_comunicate_init(const unsigned state, struct selector_key *key) {
     struct proxy5      *p = ATTACHMENT(key);
     struct response_st *r = &ATTACHMENT(key)->response;
     struct request_st  *d = &ATTACHMENT(key)->request;
-    r->client_fd = &ATTACHMENT(key)->client_fd;
-    r->origin_fd = &ATTACHMENT(key)->origin_fd;
-    r->state     = RESPONSE_STATUS;
+    r->client_fd         = &ATTACHMENT(key)->client_fd;
+    r->origin_fd         = &ATTACHMENT(key)->origin_fd;
+    r->state             = RESPONSE_STATUS;
+    r->transformation_on = proxy_configurations.transformation_on;
+    r->chunked_set       = 0;
 //    buffer_compact(d->rb, 1);
 //    buffer_reset_read(d->rb);
 }
@@ -798,10 +802,10 @@ client_read(struct selector_key *key) {
 static unsigned
 client_write(struct selector_key *key) {
     struct access_st   *a                = &ATTACHMENT(key)->access;
-    int                *trasformation_on = &ATTACHMENT(key)->transformation_on;
-    buffer             *rb               = &ATTACHMENT(key)->write_buffer; // este es el que usa el origin para escribir
     struct response_st *r                = &ATTACHMENT(key)->response;
-    int                *chunked_set      = &ATTACHMENT(key)->chunked_set;
+    buffer             *rb               = &ATTACHMENT(key)->write_buffer;
+    int                *chunked_set      = &r->chunked_set;
+    int                *trasformation_on = &r->transformation_on;
     unsigned           ret               = C_COMUNICATE;
     char               *read_ptr;
     size_t             count;
@@ -821,7 +825,6 @@ client_write(struct selector_key *key) {
     eol      = strstr(read_ptr, "\r\n"); // retorna la primera aparecion de la subcadena \r\n
     if (eol == NULL || ((eol - read_ptr) + 2) > count) { // no hay una linea completa recivida
         if (!buffer_can_write(rb)) { // si el buffer esta lleno y no hay una linea completa retornamos error
-            //TODO: si ya envie algo no puedo reportar, mejor cerrar la conexion?
             log_error("Se lleno el buffer y no podemos leer una linea completa de la respuesta");
             ret = ERROR;
         }
@@ -856,6 +859,11 @@ client_write(struct selector_key *key) {
                 if (strcasecmp(header, "Connection") ==
                     0) {  // enonctramos un header, chequeamso si es de conexion, si lo es no lo enviamos, queremos que sea no persistente
                     buffer_read_adv(rb, (eol - read_ptr) + 2);
+                } else if (*trasformation_on && (strcasecmp(header, "Content-Encoding") == 0)) {
+                    if (strcmp(value, "identity") != 0) {
+                        (*trasformation_on) = 0;
+                    }
+                    goto send;
                 } else if (*trasformation_on && (strcasecmp(header, "Content-Type") == 0)) {
                     if (proxy_configurations.media_types == NULL || strstr(proxy_configurations.media_types, value) ==
                                                                     NULL) { // no soportamos el media type a tranformar
@@ -1020,6 +1028,9 @@ transf_read(struct selector_key *key) {
     wrt_ptr = buffer_write_ptr(buff, &count);
     ret     = (size_t) read(r->t_readfd, wrt_ptr, count);
     if (ret < 0) {
+        /* TODO: esto estara bien? */
+//        selector_unregister_fd(key->s, r->t_readfd);
+//        close(r->t_readfd);
         return;
         // cerramos la transformacion
     } else if (ret == 0) { // se cerro la escritura, la transformacion ya finalizo, procedemos a cerrrar la lectura
@@ -1027,11 +1038,12 @@ transf_read(struct selector_key *key) {
         /* dejamos de pollear el fd de lectura
          * no hay mas contenido que leer, cerramos la el fd de lectura
          */
-        selector_set_interest(key->s, r->t_readfd, OP_NOOP);
+        selector_unregister_fd(key->s, r->t_readfd);
         close(r->t_readfd);
         return;
     } else {
         buffer_write_adv(buff, ret);
+        return;
     }
 }
 
@@ -1051,7 +1063,7 @@ transf_write(struct selector_key *key) {
             /* dejamos de pollear el fd de escritura
              * no hay mas contenido que mandar, cerramos la el file descriptor de escritura
              */
-            selector_set_interest(key->s, t->t_writefd, OP_NOOP);
+            selector_unregister_fd(key->s, t->t_writefd);
             close(t->t_writefd);
         }
         return;
@@ -1064,7 +1076,7 @@ transf_write(struct selector_key *key) {
      */
     size_t count_back_up = count;
 
-    if (ATTACHMENT(key)->chunked_set) {
+    if (r->chunked_set) {
         done = decode_chunked(&t->decoder, (char *) read_ptr, &count);
         if (done == 1) {
             selector_set_interest(key->s, t->t_writefd, OP_NOOP);
@@ -1073,9 +1085,13 @@ transf_write(struct selector_key *key) {
     }
     ret                  = write(t->t_writefd, read_ptr, count);
     if (ret < 0) {
+        /* TODO: esto estara bien? */
+//        selector_set_interest(key->s, t->t_writefd, OP_NOOP);
+//        close(t->t_writefd);
         return;
     } else {
         buffer_read_adv(buff, count_back_up);
+        return;
     }
 }
 
@@ -1088,6 +1104,7 @@ static void
 transform_init(const unsigned state, struct selector_key *key) {
     struct transform_st *r     = &ATTACHMENT(key)->transform;
     struct proxy5       *proxy = ATTACHMENT(key);
+    struct response_st  *d     = &ATTACHMENT(key)->response;
     r->client_fd                   = &ATTACHMENT(key)->client_fd;
     r->origin_fd                   = &ATTACHMENT(key)->origin_fd;
     r->t_rb                        = &ATTACHMENT(key)->write_buffer;
@@ -1105,6 +1122,7 @@ transform_init(const unsigned state, struct selector_key *key) {
 
     pid_t pid = fork();
     if (pid < 0) {
+        /* se produjo un error, reportamos en los logs y pasamos a estado copia*/
         log_error("No se pudo ejecutar al proceso transformador");
         proxy->client_stm.current = &client_statbl[COPY_BODY];
         return;
@@ -1118,11 +1136,15 @@ transform_init(const unsigned state, struct selector_key *key) {
         dup2(infd[0], STDIN_FILENO); // lectura
         dup2(outfd[1], STDOUT_FILENO); // escritura
         if (freopen(proxy_configurations.error_file, "a", stderr) == NULL) {
-            // no se pudo redireccionar la salida de stderr, la cerramos
+            log_error("No se pudo redireccionar la salida de error");
             close(STDERR_FILENO);
         }
         close(infd[1]); // cierro escritura en in
         close(outfd[0]); // cierro lectura en out
+
+        char version[16];
+        sprintf(version, "%d", args->version);
+        setenv("HTTPD_VERSION", version, 1);
 
         if (execl("/bin/sh", "sh", "-c", proxy_configurations.transformation_program, (char *) 0) == -1) {
             /* se produjo un error, reportamos en los logs y pasamos a estado copia*/
@@ -1141,11 +1163,13 @@ transform_init(const unsigned state, struct selector_key *key) {
         selector_fd_set_nio(r->t_writefd);
 
         if (SELECTOR_SUCCESS != selector_register(key->s, r->t_writefd, &transformation_handler, OP_WRITE, proxy)) {
+            /* se produjo un error, reportamos en los logs y pasamos a estado copia*/
             log_error("No se pudo ejecutar al proceso transformador");
             proxy->client_stm.current = &client_statbl[COPY_BODY];
             return;
         }
         if (SELECTOR_SUCCESS != selector_register(key->s, r->t_readfd, &transformation_handler, OP_READ, proxy)) {
+            /* se produjo un error, reportamos en los logs y pasamos a estado copia*/
             log_error("No se pudo ejecutar al proceso transformador");
             proxy->client_stm.current = &client_statbl[COPY_BODY];
             return;
@@ -1176,13 +1200,12 @@ transform_write(struct selector_key *key) {
 
     if (!buffer_can_read(buff)) {
         if (r->transform_done) {
-            dprintf(*r->client_fd, "\r\n%x\r\n\r\n", 0);
+            dprintf(*r->client_fd, "%x\r\n\r\n", 0);
             return DONE;
         }
         return TRANSFORM;
     }
     read_ptr = (char *) buffer_read_ptr(buff, &count);
-    /* TODO: que hacemos si write no manda la cantidad que yo especifique aca? */
     dprintf(*r->client_fd, "\r\n%x\r\n", (int) count);
     n = write(*r->client_fd, read_ptr, count);
     if (n > 0) {
@@ -1293,7 +1316,7 @@ proxy5_client_describe_states(void) {
 // Handlers top level de la conexión pasiva.
 // son los que emiten los eventos a la maquina de estados.
 static void
-proxyv5_done(struct selector_key *key);
+proxy_done(struct selector_key *key);
 
 
 struct state_machine *
@@ -1307,50 +1330,50 @@ getSmt(struct selector_key *key) {
 }
 
 void
-error_done_check(struct selector_key *key, const enum proxy_v5state st) {
+error_done_check(struct selector_key *key, const enum proxy_client_state st) {
     struct proxy5 *p = ATTACHMENT(key);
     if (key->fd == p->client_fd) {
         if (ERROR == st || DONE == st) {
-            proxyv5_done(key);
+            proxy_done(key);
         }
     } else {
         if (O_ERROR == st || O_DONE == st) {
-            proxyv5_done(key);
+            proxy_done(key);
         }
     }
 }
 
 static void
-proxyv5_read(struct selector_key *key) {
-    struct state_machine     *stm = getSmt(key);
-    const enum proxy_v5state st   = stm_handler_read(stm, key);
+proxy_read(struct selector_key *key) {
+    struct state_machine          *stm = getSmt(key);
+    const enum proxy_client_state st   = stm_handler_read(stm, key);
 
     error_done_check(key, st);
 }
 
 static void
-proxyv5_write(struct selector_key *key) {
-    struct state_machine     *stm = getSmt(key);
-    const enum proxy_v5state st   = stm_handler_write(stm, key);
+proxy_write(struct selector_key *key) {
+    struct state_machine          *stm = getSmt(key);
+    const enum proxy_client_state st   = stm_handler_write(stm, key);
 
     error_done_check(key, st);
 }
 
 static void
-proxyv5_block(struct selector_key *key) {
-    struct state_machine     *stm = getSmt(key);
-    const enum proxy_v5state st   = stm_handler_block(stm, key);
+proxy_block(struct selector_key *key) {
+    struct state_machine          *stm = getSmt(key);
+    const enum proxy_client_state st   = stm_handler_block(stm, key);
 
     error_done_check(key, st);
 }
 
 static void
-proxyv5_close(struct selector_key *key) {
+proxy_close(struct selector_key *key) {
     proxy5_destroy(ATTACHMENT(key));
 }
 
 static void
-proxyv5_done(struct selector_key *key) {
+proxy_done(struct selector_key *key) {
     log_access_wrapper(&ATTACHMENT(key)->access, (struct sockaddr *) &ATTACHMENT(key)->client_addr);
     proxy_metrics.concurrent_connections--;
     log_debug("CONEXION CERRADA");

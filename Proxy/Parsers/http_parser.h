@@ -2,8 +2,8 @@
 // Created by Fermin Gomez on 6/6/19.
 //
 
-#ifndef PROBANDOTPPROTOS_HTTP_PARSER_H
-#define PROBANDOTPPROTOS_HTTP_PARSER_H
+#ifndef TPPROTOS_HTTP_PARSER_H
+#define TPPROTOS_HTTP_PARSER_H
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -74,4 +74,4 @@ request_is_done(const enum request_state st, bool *errored);
 void
 request_close(struct request_parser *p);
 
-#endif //PROBANDOTPPROTOS_HTTP_PARSER_H
+#endif //TPPROTOS_HTTP_PARSER_H

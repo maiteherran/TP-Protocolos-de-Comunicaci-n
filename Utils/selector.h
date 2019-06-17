@@ -42,23 +42,23 @@
  *  - esperar algún evento: `selector_iteratate'
  *  - destruir los recursos de la librería `selector_close'
  */
-typedef struct fdselector * fd_selector;
+typedef struct fdselector *fd_selector;
 
 /** valores de retorno. */
 typedef enum {
     /** llamada exitosa */
-    SELECTOR_SUCCESS  = 0,
+            SELECTOR_SUCCESS = 0,
     /** no pudimos alocar memoria */
-    SELECTOR_ENOMEM   = 1,
+            SELECTOR_ENOMEM  = 1,
     /** llegamos al límite de descriptores que la plataforma puede manejar */
-    SELECTOR_MAXFD    = 2,
+            SELECTOR_MAXFD   = 2,
     /** argumento ilegal */
-    SELECTOR_IARGS    = 3,
+            SELECTOR_IARGS   = 3,
     /** descriptor ya está en uso */
-    SELECTOR_FDINUSE  = 4,
+            SELECTOR_FDINUSE = 4,
     /** I/O error check errno */
-    SELECTOR_IO       = 5,
-} selector_status;
+            SELECTOR_IO      = 5,
+}                         selector_status;
 
 /** retorna una descripción humana del fallo */
 const char *
@@ -98,10 +98,10 @@ selector_destroy(fd_selector s);
  * OP_NOOP es útil para cuando no se tiene ningún interés.
  */
 typedef enum {
-    OP_NOOP    = 0,         //000 = 0
-    OP_READ    = 1 << 0,   // 001 = 1
-    OP_WRITE   = 1 << 2,   // 100 = 4
-} fd_interest ;
+    OP_NOOP  = 0,         //000 = 0
+    OP_READ  = 1 << 0,   // 001 = 1
+    OP_WRITE = 1 << 2,   // 100 = 4
+}                         fd_interest;
 
 /**
  * Quita un interés de una lista de intereses
@@ -117,22 +117,26 @@ struct selector_key {
     /** el file descriptor en cuestión */
     int         fd;
     /** dato provisto por el usuario */
-    void *      data;
+    void        *data;
 };
 
 /**
  * Manejador de los diferentes eventos..
  */
 typedef struct fd_handler {
-  void (*handle_read)      (struct selector_key *key);
-  void (*handle_write)     (struct selector_key *key);
-  void (*handle_block)     (struct selector_key *key);
-  void (*handle_timeout)     (struct selector_key *key);
-  /**
-   * llamado cuando se se desregistra el fd
-   * Seguramente deba liberar los recusos alocados en data.
-   */
-  void (*handle_close)     (struct selector_key *key);
+    void (*handle_read)(struct selector_key *key);
+
+    void (*handle_write)(struct selector_key *key);
+
+    void (*handle_block)(struct selector_key *key);
+
+    void (*handle_timeout)(struct selector_key *key);
+
+    /**
+     * llamado cuando se se desregistra el fd
+     * Seguramente deba liberar los recusos alocados en data.
+     */
+    void (*handle_close)(struct selector_key *key);
 
 } fd_handler;
 
@@ -148,18 +152,18 @@ typedef struct fd_handler {
  * @return 0 si fue exitoso el registro.
  */
 selector_status
-selector_register(fd_selector        s,
-                  const int          fd,
-                  const fd_handler  *handler,
-                  const fd_interest  interest,
+selector_register(fd_selector s,
+                  const int fd,
+                  const fd_handler *handler,
+                  const fd_interest interest,
                   void *data);
 
 /**
  * desregistra un file descriptor del selector
  */
 selector_status
-selector_unregister_fd(fd_selector   s,
-                       const int     fd);
+selector_unregister_fd(fd_selector s,
+                       const int fd);
 
 /** permite cambiar los intereses para un file descriptor */
 selector_status
@@ -188,6 +192,6 @@ selector_fd_set_nio(const int fd);
 /** notifica que un trabajo bloqueante terminó */
 selector_status
 selector_notify_block(fd_selector s,
-                 const int   fd);
+                      const int fd);
 
 #endif

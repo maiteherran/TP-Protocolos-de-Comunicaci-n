@@ -1,7 +1,7 @@
 /**
- * admin.c  - TODO: descripcion
+ * admin.c
  */
-#include "admin.h"
+#include "admin_nio.h"
 #include<stdio.h>
 #include <stdlib.h>  // malloc
 #include <string.h>  // memset
@@ -41,27 +41,90 @@
 #define TRANSFERRED_BYTES 0X04
 
 /** maquina de estados general */
-enum socks_v5state {
+enum hpcp_state {
+    /*
+    * Recibe el mensaje hello del cliente, lo parsea verificando que este OK
+    *
+    * Transiciones:
+    * HELLO_WRITE
+    * ERROR se perido la conexion
+    */
+            HELLO_READ,
+    /*
+     * Notifica al cliente si habia un error o no en el hello
+     *
+     * Transiciones:
+     * AUTH_READ
+     * ERROR se perido la conexion
+     */
+            HELLO_WRITE,
+    /*
+     * Recibe la autentificacion del cliente y verifica la misma
+     *
+     * Transiciones:
+     * AUTH_WRITE
+     * ERROR se perido la conexion
+     */
+            AUTH_READ,
+    /*
+     * Notifica al cliente si habia un error o no en la autentificacion
+     *
+     * Transiciones:
+     * COMAND_READ
+     * ERROR se perido la conexion
+     */
+            AUTH_WRITE,
+    /*
+     * Recibe el comando a ejcutar del cliente y lo ejecuta
+     *
+     * Transiciones:
+     * COMAND_WRITE
+     * ERROR se perido la conexion
+     */
+            COMAND_READ,
+    /*
+     * Notifica al cliente el resultado de la ejecucion del comando
+     *
+     * Transiciones:
+     * COMAND_READ lectura del proximo comando a ejecutar
+     * ERROR se perido la conexion
+     */
+            COMAND_WRITE,
+    /*
+     *
+     *
+     * Transiciones:
+     *
+     */
 
-    HELLO_READ,
+            REQUEST_ERROR,
+    /*
+     * Notifica el cierre de conexion con el cliente
+     *
+     * Transiciones:
+     * DONE
+     * ERROR se perido la conexion
+     *
+     */
 
-    HELLO_WRITE,
-
-    AUTH_READ,
-
-    AUTH_WRITE,
-
-    COMAND_READ,
-
-    COMAND_WRITE,
-
-    REQUEST_ERROR,
-
-    CLOSE,
-
-    DONE,
-
-    ERROR,
+            CLOSE,
+    /*
+     * Finalizacion de la comunicacion con el cliente propiamente dicha y liberarmos recursos
+     *
+     * Transiciones:
+     * ninunga
+     *
+     */
+            DONE,
+    /*
+     * Si se presenta algun error terminamos en este estado, se cierran las conexiones y se liberan recursos
+     *
+     * Transiciones:
+     * COMAND_READ
+     * ninguna
+     *
+     */
+            ERROR,
 };
 
 ////////////////////////////////////////////////////////////////////
@@ -75,7 +138,7 @@ struct request_st {
     struct hpcp_request_parser *hpcp_parser;
 
     /*Request que está siendo parseado*/
-    struct hpcp_request request;
+    struct hpcp_request       request;
     enum hpcp_response_status response_status;
 
     const int *client_fd;
@@ -107,7 +170,7 @@ struct hpcp {
     /** maquinas de estados */
     struct state_machine stm;
 
-    enum socks_v5state state_before_error;
+    enum hpcp_state state_before_error;
 
     /** buffers para ser usados read_buffer, write_buffer.*/
     uint8_t raw_buff_a[2048], raw_buff_b[2048];
@@ -132,11 +195,11 @@ static unsigned       pool_size = 0;  // tamaño actual
 static struct hpcp    *pool     = 0;  // pool propiamente dicho
 
 static const struct state_definition *
-socks5_describe_states(void);
+hpcp5_describe_states(void);
 
-/** crea un nuevo `struct socks5' */
+/** crea un nuevo `struct hpcp5' */
 static struct hpcp *
-socks5_new(int client_fd) {
+hpcp5_new(int client_fd) {
     struct hpcp *ret;
 
     if (pool == NULL) {
@@ -156,7 +219,7 @@ socks5_new(int client_fd) {
 
     ret->stm.initial   = HELLO_READ;
     ret->stm.max_state = ERROR;
-    ret->stm.states    = socks5_describe_states();
+    ret->stm.states    = hpcp5_describe_states();
     stm_init(&ret->stm);
 
     buffer_init(&ret->read_buffer, N(ret->raw_buff_a), ret->raw_buff_a);
@@ -177,17 +240,17 @@ socks5_new(int client_fd) {
 
 /** realmente destruye */
 static void
-socks5_destroy_(struct hpcp *s) {
+hpcp5_destroy_(struct hpcp *s) {
     free_hpcp_request(&s->request.request);
     free(s);
 }
 
 /**
- * destruye un  `struct socks5', tiene en cuenta las referencias
+ * destruye un  `struct hpcp5', tiene en cuenta las referencias
  * y el pool de objetos.
  */
 static void
-socks5_destroy(struct hpcp *s) {
+hpcp5_destroy(struct hpcp *s) {
     if (s == NULL) {
         // nada para hacer
     } else if (s->references == 1) {
@@ -197,7 +260,7 @@ socks5_destroy(struct hpcp *s) {
                 pool = s;
                 pool_size++;
             } else {
-                socks5_destroy_(s);
+                hpcp5_destroy_(s);
             }
         }
     } else {
@@ -206,7 +269,7 @@ socks5_destroy(struct hpcp *s) {
 }
 
 void
-socksv5_pool_destroy(void) {
+hpcp_pool_destroy(void) {
     struct hpcp *next, *s;
     for (s = pool; s != NULL; s = next) {
         next = s->next;
@@ -214,7 +277,7 @@ socksv5_pool_destroy(void) {
     }
 }
 
-/** obtiene el struct (socks5 *) desde la llave de selección  */
+/** obtiene el struct (hpcp5 *) desde la llave de selección  */
 #define ATTACHMENT(key) ( (struct hpcp *)(key)->data)
 
 /* declaración forward de los handlers de selección de una conexión
@@ -224,25 +287,25 @@ socksv5_pool_destroy(void) {
 void
 cmd_close(int client_fd, struct buffer *buff);
 
-static void socksv5_read(struct selector_key *key);
+static void hpcp_read(struct selector_key *key);
 
-static void socksv5_write(struct selector_key *key);
+static void hpcp_write(struct selector_key *key);
 
-static void socksv5_block(struct selector_key *key);
+static void hpcp_block(struct selector_key *key);
 
-static void socksv5_close(struct selector_key *key);
+static void hpcp_close(struct selector_key *key);
 
-static const struct fd_handler socks5_handler = {
-        .handle_read    = socksv5_read,
-        .handle_write   = socksv5_write,
-        .handle_close   = socksv5_close,
-        .handle_block   = socksv5_block,
+static const struct fd_handler hpcp5_handler = {
+        .handle_read    = hpcp_read,
+        .handle_write   = hpcp_write,
+        .handle_close   = hpcp_close,
+        .handle_block   = hpcp_block,
         .handle_timeout = NULL,
 };
 
 /** Intenta aceptar la nueva conexión entrante*/
 void
-socksv5_passive_accept(struct selector_key *key) {
+hpcp_passive_accept(struct selector_key *key) {
     struct sockaddr_storage client_addr;
     socklen_t               client_addr_len = sizeof(client_addr);
     struct hpcp             *state          = NULL;
@@ -255,7 +318,7 @@ socksv5_passive_accept(struct selector_key *key) {
     if (selector_fd_set_nio(client) == -1) {
         goto fail;
     }
-    state = socks5_new(client);
+    state = hpcp5_new(client);
     if (state == NULL) {
         // sin un estado, nos es imposible manejaro.
         // tal vez deberiamos apagar accept() hasta que detectemos
@@ -265,23 +328,22 @@ socksv5_passive_accept(struct selector_key *key) {
     memcpy(&state->client_addr, &client_addr, client_addr_len);
     state->client_addr_len = client_addr_len;
 
-    if (SELECTOR_SUCCESS != selector_register(key->s, client, &socks5_handler,
+    if (SELECTOR_SUCCESS != selector_register(key->s, client, &hpcp5_handler,
                                               OP_READ, state)) {
         goto fail;
     }
-    printf("Cliente admin conecntado");
+    log_debug("Cliente admin conecntado");
     return;
     fail:
     if (client != -1) {
         close(client);
     }
-    socks5_destroy(state);
+    hpcp5_destroy(state);
 }
 
 static void
 on_read_departure(const unsigned state, struct selector_key *key) {
     struct request_st *r = &ATTACHMENT(key)->request;
-//    free_hpcp_request(r->request);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -295,7 +357,7 @@ hello_process(struct selector_key *key, struct request_st *r);
 static void
 hello_read_init(const unsigned state, struct selector_key *key) {
     struct request_st *r = &ATTACHMENT(key)->request;
-    r->hpcp_parser->state   = hpcp_request_cmd;
+    r->hpcp_parser->state = hpcp_request_cmd;
 }
 
 /** lee todos los bytes del mensaje de tipo `hello' y inicia su proceso */
@@ -328,13 +390,12 @@ hello_read(struct selector_key *key) {
     return ret;
 }
 
-/** procesamiento del mensaje `hello' */
 static unsigned
 hello_process(struct selector_key *key, struct request_st *r) { // recivo error y proceso la respuesta
-    struct buffer *buff = r->wb;
+    struct buffer       *buff    = r->wb;
     struct hpcp_request *request = &r->request;
     if (request->nargs != CMD_HELLO_NARGS || request->args_sizes[0] != VERSION_SIZE) {
-        printf("invalid hello args\n");
+        log_debug("invalid hello args\n");
         return ERROR;
     }
 //    if (request->args[0][0] != 0x01 || request->args[0][1] != 0x00) {
@@ -383,14 +444,12 @@ hello_write(struct selector_key *key) {
 static unsigned
 auth_process(struct selector_key *key, struct request_st *r);
 
-/** inicializa las variables de los estados HELLO_… */
 static void
 auth_read_init(const unsigned state, struct selector_key *key) {
     struct request_st *r = &ATTACHMENT(key)->request;
     r->hpcp_parser->state = hpcp_request_cmd;
 }
 
-/** lee todos los bytes del mensaje de tipo `hello' y inicia su proceso */
 static unsigned
 auth_read(struct selector_key *key) {
     struct request_st       *r    = &ATTACHMENT(key)->request;
@@ -420,16 +479,16 @@ auth_read(struct selector_key *key) {
     return ret;
 }
 
-/** procesamiento del mensaje `hello' */
 static unsigned
 auth_process(struct selector_key *key, struct request_st *r) { // recivo error y proceso la respuesta
-    struct buffer *buff = r->wb;
+    struct buffer       *buff    = r->wb;
     struct hpcp_request *request = &r->request;
     if (request->nargs != CMD_AUTH_NARGS) {
-        printf("invalid hello args\n");
+        log_debug("invalid hello args\n");
         return hpcp_request_error_invalid_args;
     }
-    if (log_in((char *)r->request.args[0], r->request.args_sizes[0], (char *)r->request.args[1], r->request.args_sizes[1])) {
+    if (log_in((char *) r->request.args[0], r->request.args_sizes[0], (char *) r->request.args[1],
+               r->request.args_sizes[1])) {
         buffer_write(buff, hpcp_status_ok);
         buffer_write(buff, 0x00);
     } else {
@@ -444,7 +503,6 @@ auth_process(struct selector_key *key, struct request_st *r) { // recivo error y
 // AUTH_WRITE
 ////////////////////////////////////////////////////////////////////////////////
 
-/** escribe todos los bytes de la respuesta al mensaje `hello' */
 static unsigned
 auth_write(struct selector_key *key) {
     int           client_fd = ATTACHMENT(key)->client_fd;
@@ -475,30 +533,43 @@ auth_write(struct selector_key *key) {
 
 static unsigned
 cmd_process(struct selector_key *key, struct request_st *request);
+
 static unsigned cmd_close_process(struct request_st *r);
+
 static unsigned cmd_get_process(struct request_st *r);
+
 static unsigned cmd_get_configurations_process(struct request_st *r);
+
 static unsigned get_transformation_program(struct request_st *r);
+
 static unsigned get_transformation_program_status(struct request_st *r);
+
 static unsigned get_media_types(struct request_st *r);
+
 static unsigned cmd_get_metrics_process(struct request_st *r);
+
 static unsigned get_concurrent_connections(struct request_st *r);
+
 static unsigned get_historic_accesses(struct request_st *r);
+
 static unsigned get_transferred_bytes(struct request_st *r);
+
 static unsigned cmd_set_process(struct request_st *r);
+
 static unsigned cmd_set_configurations_process(struct request_st *r);
+
 static unsigned set_transformation_program(struct request_st *r);
+
 static unsigned set_transformation_program_status(struct request_st *r);
+
 static unsigned set_media_types(struct request_st *r);
 
-/** inicializa las variables de los estados HELLO_… */
 static void
 cmd_read_init(const unsigned state, struct selector_key *key) {
     struct request_st *r = &ATTACHMENT(key)->request;
     r->hpcp_parser->state = hpcp_request_cmd;
 }
 
-/** lee todos los bytes del mensaje de tipo `hello' y inicia su proceso */
 static unsigned
 cmd_read(struct selector_key *key) {
     struct request_st       *r    = &ATTACHMENT(key)->request;
@@ -530,9 +601,9 @@ cmd_read(struct selector_key *key) {
 
 static unsigned
 cmd_process(struct selector_key *key, struct request_st *r) { // recibo error y proceso la respuesta
-    struct buffer *buff = r->wb;
+    struct buffer       *buff    = r->wb;
     struct hpcp_request *request = &r->request;
-    unsigned int ret;
+    unsigned int        ret;
     switch (request->cmd) {
         case hpcp_request_cmd_close:
             ret = cmd_close_process(r);
@@ -552,7 +623,7 @@ cmd_process(struct selector_key *key, struct request_st *r) { // recibo error y 
 }
 
 static unsigned cmd_close_process(struct request_st *r) {
-    struct buffer *buff = r->wb;
+    struct buffer       *buff    = r->wb;
     struct hpcp_request *request = &r->request;
     if (request->nargs != CMD_CLOSE_NARGS) {
         return ERROR;
@@ -597,14 +668,14 @@ static unsigned cmd_get_configurations_process(struct request_st *r) {
 }
 
 static unsigned get_transformation_program(struct request_st *r) {
-    printf("funcion get_transformation_program\n");
-    buffer *b = r->wb;
+    buffer  *b    = r->wb;
     size_t  n;
     uint8_t *buff = buffer_write_ptr(b, &n);
 
-    int arglen = strlen(proxy_configurations.transformation_program);
-    int total_response_length = 2 + 1 + arglen; //minimo necesito 2 bytes para el response status y nresp, 1 para la longitud de la primer respuesta, sizeof(unisgned long long) para la respuesta
-    if(n < total_response_length) {
+    int arglen                = strlen(proxy_configurations.transformation_program);
+    int total_response_length = 2 + 1 +
+                                arglen; //minimo necesito 2 bytes para el response status y nresp, 1 para la longitud de la primer respuesta, sizeof(unisgned long long) para la respuesta
+    if (n < total_response_length) {
         return -1;
     }
     buff[0] = r->response_status;
@@ -618,13 +689,12 @@ static unsigned get_transformation_program(struct request_st *r) {
 }
 
 static unsigned get_transformation_program_status(struct request_st *r) {
-    printf("funcion get_transformation_program_status\n");
-    buffer *b = r->wb;
+    buffer  *b    = r->wb;
     size_t  n;
     uint8_t *buff = buffer_write_ptr(b, &n);
 
     int total_response_length = 4; //minimo necesito 2 bytes para el response status y nresp, 1 para la longitud de la primer respuesta, sizeof(unisgned long long) para la respuesta
-    if(n < total_response_length) {
+    if (n < total_response_length) {
         return -1;
     }
     buff[0] = r->response_status;
@@ -637,14 +707,14 @@ static unsigned get_transformation_program_status(struct request_st *r) {
 }
 
 static unsigned get_media_types(struct request_st *r) {
-    printf("funcion get_media_types\n");
-    buffer *b = r->wb;
+    buffer  *b    = r->wb;
     size_t  n;
     uint8_t *buff = buffer_write_ptr(b, &n);
 
-    int arglen = strlen(proxy_configurations.media_types);
-    int total_response_length = 2 + 1 + arglen; //minimo necesito 2 bytes para el response status y nresp, 1 para la longitud de la primer respuesta, sizeof(unisgned long long) para la respuesta
-    if(n < total_response_length) {
+    int arglen                = strlen(proxy_configurations.media_types);
+    int total_response_length = 2 + 1 +
+                                arglen; //minimo necesito 2 bytes para el response status y nresp, 1 para la longitud de la primer respuesta, sizeof(unisgned long long) para la respuesta
+    if (n < total_response_length) {
         return -1;
     }
     buff[0] = r->response_status;
@@ -675,13 +745,13 @@ static unsigned cmd_get_metrics_process(struct request_st *r) {
 }
 
 static unsigned get_concurrent_connections(struct request_st *r) {
-    printf("funcion get_concurrent_connections\n");
-    buffer *b = r->wb;
+    buffer  *b    = r->wb;
     size_t  n;
     uint8_t *buff = buffer_write_ptr(b, &n);
 
-    int total_response_length = 2 + 1 + sizeof(proxy_metrics.concurrent_connections); //minimo necesito 2 bytes para el response status y nresp, 1 para la longitud de la primer respuesta, sizeof(unisgned long long) para la respuesta
-    if(n < total_response_length) {
+    int total_response_length = 2 + 1 +
+                                sizeof(proxy_metrics.concurrent_connections); //minimo necesito 2 bytes para el response status y nresp, 1 para la longitud de la primer respuesta, sizeof(unisgned long long) para la respuesta
+    if (n < total_response_length) {
         return -1;
     }
     buff[0] = r->response_status;
@@ -689,23 +759,23 @@ static unsigned get_concurrent_connections(struct request_st *r) {
     buff[2] = 4;
     buffer_write_adv(b, 3);
     // convert from an unsigned long int to a 4-byte array
-    buff[3] = (int)((proxy_metrics.concurrent_connections >> 24) & 0xFF) ;
-    buff[4] = (int)((proxy_metrics.concurrent_connections >> 16) & 0xFF) ;
-    buff[5] = (int)((proxy_metrics.concurrent_connections >> 8) & 0XFF);
-    buff[6] = (int)((proxy_metrics.concurrent_connections & 0XFF));
+    buff[3] = (int) ((proxy_metrics.concurrent_connections >> 24) & 0xFF);
+    buff[4] = (int) ((proxy_metrics.concurrent_connections >> 16) & 0xFF);
+    buff[5] = (int) ((proxy_metrics.concurrent_connections >> 8) & 0XFF);
+    buff[6] = (int) ((proxy_metrics.concurrent_connections & 0XFF));
     buffer_write_adv(b, 4);
 
     return COMAND_WRITE;
 }
 
 static unsigned get_historic_accesses(struct request_st *r) {
-    printf("funcion get_concurrent_connections\n");
-    buffer *b = r->wb;
+    buffer  *b    = r->wb;
     size_t  n;
     uint8_t *buff = buffer_write_ptr(b, &n);
 
-    int total_response_length = 2 + 1 + sizeof(proxy_metrics.historic_accesses); //minimo necesito 2 bytes para el response status y nresp, 1 para la longitud de la primer respuesta, sizeof(unisgned long long) para la respuesta
-    if(n < total_response_length) {
+    int total_response_length = 2 + 1 +
+                                sizeof(proxy_metrics.historic_accesses); //minimo necesito 2 bytes para el response status y nresp, 1 para la longitud de la primer respuesta, sizeof(unisgned long long) para la respuesta
+    if (n < total_response_length) {
         return -1;
     }
     buff[0] = r->response_status;
@@ -713,23 +783,23 @@ static unsigned get_historic_accesses(struct request_st *r) {
     buff[2] = 4;
     buffer_write_adv(b, 3);
     // convert from an unsigned long int to a 4-byte array
-    buff[3] = (int)((proxy_metrics.historic_accesses >> 24) & 0xFF) ;
-    buff[4] = (int)((proxy_metrics.historic_accesses >> 16) & 0xFF) ;
-    buff[5] = (int)((proxy_metrics.historic_accesses >> 8) & 0XFF);
-    buff[6] = (int)((proxy_metrics.historic_accesses & 0XFF));
+    buff[3] = (int) ((proxy_metrics.historic_accesses >> 24) & 0xFF);
+    buff[4] = (int) ((proxy_metrics.historic_accesses >> 16) & 0xFF);
+    buff[5] = (int) ((proxy_metrics.historic_accesses >> 8) & 0XFF);
+    buff[6] = (int) ((proxy_metrics.historic_accesses & 0XFF));
     buffer_write_adv(b, 4);
 
     return COMAND_WRITE;
 }
 
 static unsigned get_transferred_bytes(struct request_st *r) {
-    printf("funcion get_concurrent_connections\n");
-    buffer *b = r->wb;
+    buffer  *b    = r->wb;
     size_t  n;
     uint8_t *buff = buffer_write_ptr(b, &n);
 
-    int total_response_length = 2 + 1 + sizeof(proxy_metrics.transferred_bytes); //minimo necesito 2 bytes para el response status y nresp, 1 para la longitud de la primer respuesta, sizeof(unisgned long long) para la respuesta
-    if(n < total_response_length) {
+    int total_response_length = 2 + 1 +
+                                sizeof(proxy_metrics.transferred_bytes); //minimo necesito 2 bytes para el response status y nresp, 1 para la longitud de la primer respuesta, sizeof(unisgned long long) para la respuesta
+    if (n < total_response_length) {
         return -1;
     }
     buff[0] = r->response_status;
@@ -737,10 +807,10 @@ static unsigned get_transferred_bytes(struct request_st *r) {
     buff[2] = 4;
     buffer_write_adv(b, 3);
     // convert from an unsigned long int to a 4-byte array
-    buff[3] = (int)((proxy_metrics.transferred_bytes >> 24) & 0xFF) ;
-    buff[4] = (int)((proxy_metrics.transferred_bytes >> 16) & 0xFF) ;
-    buff[5] = (int)((proxy_metrics.transferred_bytes >> 8) & 0XFF);
-    buff[6] = (int)((proxy_metrics.transferred_bytes & 0XFF));
+    buff[3] = (int) ((proxy_metrics.transferred_bytes >> 24) & 0xFF);
+    buff[4] = (int) ((proxy_metrics.transferred_bytes >> 16) & 0xFF);
+    buff[5] = (int) ((proxy_metrics.transferred_bytes >> 8) & 0XFF);
+    buff[6] = (int) ((proxy_metrics.transferred_bytes & 0XFF));
     buffer_write_adv(b, 4);
 
     return COMAND_WRITE;
@@ -778,12 +848,12 @@ static unsigned cmd_set_configurations_process(struct request_st *r) {
 }
 
 static unsigned set_transformation_program(struct request_st *r) {
-    buffer *b = r->wb;
+    buffer  *b    = r->wb;
     size_t  n;
     uint8_t *buff = buffer_write_ptr(b, &n);
 
     int total_response_length = 2;
-    if(n < total_response_length) {
+    if (n < total_response_length) {
         return -1;
     }
     char *aux = realloc(proxy_configurations.transformation_program, r->request.args_sizes[2]);
@@ -794,7 +864,7 @@ static unsigned set_transformation_program(struct request_st *r) {
         proxy_configurations.transformation_program = aux;
         memcpy(proxy_configurations.transformation_program, r->request.args[2], r->request.args_sizes[2]);
         proxy_configurations.transformation_on = 0x01; // queda activo por defecto
-        r->response_status = hpcp_status_ok;
+        r->response_status                     = hpcp_status_ok;
     }
     buff[0] = r->response_status;
     buff[1] = 0x00;
@@ -804,12 +874,12 @@ static unsigned set_transformation_program(struct request_st *r) {
 }
 
 static unsigned set_transformation_program_status(struct request_st *r) {
-    buffer *b = r->wb;
+    buffer  *b    = r->wb;
     size_t  n;
     uint8_t *buff = buffer_write_ptr(b, &n);
 
     int total_response_length = 2; //minimo necesito 2 bytes para el response status y nresp, 1 para la longitud de la primer respuesta, sizeof(unisgned long long) para la respuesta
-    if(n < total_response_length) {
+    if (n < total_response_length) {
         return -1;
     }
 
@@ -817,7 +887,7 @@ static unsigned set_transformation_program_status(struct request_st *r) {
         r->response_status = hpcp_status_error;
     } else {
         proxy_configurations.transformation_on = r->request.args[2][0];
-        r->response_status = hpcp_status_ok;
+        r->response_status                     = hpcp_status_ok;
     }
 
     buff[0] = r->response_status;
@@ -828,12 +898,12 @@ static unsigned set_transformation_program_status(struct request_st *r) {
 }
 
 static unsigned set_media_types(struct request_st *r) {
-    buffer *b = r->wb;
+    buffer  *b    = r->wb;
     size_t  n;
     uint8_t *buff = buffer_write_ptr(b, &n);
 
     int total_response_length = 2;
-    if(n < total_response_length) {
+    if (n < total_response_length) {
         return -1;
     }
     char *aux = realloc(proxy_configurations.media_types, r->request.args_sizes[2]);
@@ -857,7 +927,6 @@ static unsigned set_media_types(struct request_st *r) {
 // CMD_WRITE
 ////////////////////////////////////////////////////////////////////////////////
 
-/** escribe todos los bytes de la respuesta al mensaje `hello' */
 static unsigned
 cmd_write(struct selector_key *key) {
     int           client_fd = ATTACHMENT(key)->client_fd;
@@ -887,7 +956,6 @@ cmd_write(struct selector_key *key) {
 // CLOSE
 ////////////////////////////////////////////////////////////////////////////////
 
-/** escribe todos los bytes de la respuesta al mensaje `hello' */
 static unsigned
 close_write(struct selector_key *key) {
     int           client_fd = ATTACHMENT(key)->client_fd;
@@ -919,12 +987,12 @@ close_write(struct selector_key *key) {
 
 static unsigned
 request_error_write(struct selector_key *key) {
-    int                client_fd = ATTACHMENT(key)->client_fd;
-    struct buffer      *buff     = &ATTACHMENT(key)->write_buffer;
-    enum socks_v5state ret       = ATTACHMENT(key)->state_before_error;
-    uint8_t            *ptr;
-    size_t             count;
-    ssize_t            n;
+    int             client_fd = ATTACHMENT(key)->client_fd;
+    struct buffer   *buff     = &ATTACHMENT(key)->write_buffer;
+    enum hpcp_state ret       = ATTACHMENT(key)->state_before_error;
+    uint8_t         *ptr;
+    size_t          count;
+    ssize_t         n;
 
     if (!buffer_can_read(buff)) {
         return ERROR;
@@ -1004,7 +1072,7 @@ static const struct state_definition client_statbl[] = {
 };
 
 static const struct state_definition *
-socks5_describe_states(void) {
+hpcp5_describe_states(void) {
     return client_statbl;
 }
 
@@ -1012,45 +1080,45 @@ socks5_describe_states(void) {
 // Handlers top level de la conexión pasiva.
 // son los que emiten los eventos a la maquina de estados.
 static void
-socksv5_done(struct selector_key *key);
+hpcp_done(struct selector_key *key);
 
 static void
-socksv5_read(struct selector_key *key) {
-    struct state_machine     *stm = &ATTACHMENT(key)->stm;
-    const enum socks_v5state st   = stm_handler_read(stm, key);
+hpcp_read(struct selector_key *key) {
+    struct state_machine  *stm = &ATTACHMENT(key)->stm;
+    const enum hpcp_state st   = stm_handler_read(stm, key);
 
-    if (ERROR == st  || DONE == st) {
-        socksv5_done(key);
+    if (ERROR == st || DONE == st) {
+        hpcp_done(key);
     }
 }
 
 static void
-socksv5_write(struct selector_key *key) {
-    struct state_machine     *stm = &ATTACHMENT(key)->stm;
-    const enum socks_v5state st   = stm_handler_write(stm, key);
+hpcp_write(struct selector_key *key) {
+    struct state_machine  *stm = &ATTACHMENT(key)->stm;
+    const enum hpcp_state st   = stm_handler_write(stm, key);
 
-    if (ERROR == st  || DONE == st) {
-        socksv5_done(key);
+    if (ERROR == st || DONE == st) {
+        hpcp_done(key);
     }
 }
 
 static void
-socksv5_block(struct selector_key *key) {
-    struct state_machine     *stm = &ATTACHMENT(key)->stm;
-    const enum socks_v5state st   = stm_handler_block(stm, key);
+hpcp_block(struct selector_key *key) {
+    struct state_machine  *stm = &ATTACHMENT(key)->stm;
+    const enum hpcp_state st   = stm_handler_block(stm, key);
 
-    if (ERROR == st || DONE == st ) {
-        socksv5_done(key);
+    if (ERROR == st || DONE == st) {
+        hpcp_done(key);
     }
 }
 
 static void
-socksv5_close(struct selector_key *key) {
-    socks5_destroy(ATTACHMENT(key));
+hpcp_close(struct selector_key *key) {
+    hpcp5_destroy(ATTACHMENT(key));
 }
 
 static void
-socksv5_done(struct selector_key *key) {
+hpcp_done(struct selector_key *key) {
     const int     fds[] = {
             ATTACHMENT(key)->client_fd,
     };

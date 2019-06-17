@@ -1,5 +1,5 @@
-#ifndef PROBANDOTPPROTOS_LOG_H
-#define PROBANDOTPPROTOS_LOG_H
+#ifndef TPPROTOS_LOG_H
+#define TPPROTOS_LOG_H
 
 #include <stdio.h>
 #include <time.h>
@@ -30,4 +30,4 @@ void log_debug(const char *fmt, ...);
 
 void log_warn(const char *fmt, ...);
 
-#endif //PROBANDOTPPROTOS_LOG_H
+#endif //TPPROTOS_LOG_H

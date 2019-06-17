@@ -16,7 +16,7 @@ buffer_reset(buffer *b) {
 
 inline void
 buffer_reset_read(buffer *b) {
-    b->read  = b->data;
+    b->read = b->data;
 }
 
 void

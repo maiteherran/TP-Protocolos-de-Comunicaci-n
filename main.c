@@ -11,15 +11,16 @@
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include "Utils/selector.h"
-#include "Admin/admin.h"
-#include "Proxy/proxy5nio.h"
+#include "Admin/admin_nio.h"
+#include "Proxy/proxy_nio.h"
 #include "Utils/log.h"
 #include "Proxy/metrics.h"
 #include "Proxy/config.h"
 #include "Utils/server_arguments.h"
 
-metrics proxy_metrics;
-conf    proxy_configurations;
+metrics                proxy_metrics;
+conf                   proxy_configurations;
+extern server_args_ptr args;
 
 int server_init(int port, char *address, int protocol, const struct fd_handler *handler);
 
@@ -39,15 +40,15 @@ const char      *err_msg = NULL;
 selector_status ss       = SELECTOR_SUCCESS;
 fd_selector     selector = NULL;
 
-const struct fd_handler proxyv5 = {
-        .handle_read       = proxyv5_passive_accept,
+const struct fd_handler proxy_handler = {
+        .handle_read       = proxy_passive_accept,
         .handle_write      = NULL,
         .handle_close      = NULL, // nada que liberar
         .handle_timeout    = NULL
 };
 
 const struct fd_handler admin_handler = {
-        .handle_read       = socksv5_passive_accept,
+        .handle_read       = hpcp_passive_accept,
         .handle_write      = NULL,
         .handle_close      = NULL, // nada que liberar
         .handle_timeout    = NULL,
@@ -83,12 +84,12 @@ main(const int argc, const char **argv) {
         goto finally;
     }
 
-    server_args_ptr args = read_arguments(argc, argv);
+    args = read_arguments(argc, argv);
     logger_init();
     metrics_init();
     conf_init(args->media_types, args->cmd, args->error_file);
 
-    int proxy_server = server_init(args->http_port, args->http_address, IPPROTO_TCP, &proxyv5);
+    int proxy_server = server_init(args->http_port, args->http_address, IPPROTO_TCP, &proxy_handler);
     int admin_server = server_init(args->admin_port, args->admin_address, IPPROTO_TCP,
                                    &admin_handler); // TODO: pasar a IPPROTO_SCTP
 
@@ -126,7 +127,7 @@ main(const int argc, const char **argv) {
     }
     selector_close();
 
-    proxyv5_pool_destroy();
+    proxy_pool_destroy();
 
     if (proxy_server >= 0) {
         close(proxy_server);
@@ -139,11 +140,10 @@ int server_init(int port, char *address, int protocol, const struct fd_handler *
     struct sockaddr_in addr;
     struct addrinfo    hint, *res = NULL;
     int                ret, domain;
-//    addr.sin_family      = AF_UNSPEC;
 
     memset(&addr, 0, sizeof(addr));
     memset(&hint, 0, sizeof hint);
-    addr.sin_port = htons(port);
+    addr.sin_port  = htons(port);
     hint.ai_family = AF_UNSPEC;
     hint.ai_flags  = AI_NUMERICHOST;
 
@@ -217,7 +217,11 @@ void metrics_init() {
 
 void conf_init(char *media_types, char *transf_p, char *error_f) {
     proxy_configurations.media_types            = media_types;
-    proxy_configurations.transformation_on      = 0;
     proxy_configurations.transformation_program = transf_p;
     proxy_configurations.error_file             = error_f;
+    if (proxy_configurations.transformation_program != NULL) {
+        proxy_configurations.transformation_on = 1;
+    } else {
+        proxy_configurations.transformation_on = 0;
+    }
 }

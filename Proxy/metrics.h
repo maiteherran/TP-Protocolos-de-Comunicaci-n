@@ -2,8 +2,8 @@
 // Created by Fermin Gomez on 6/13/19.
 //
 
-#ifndef PROBANDOTPPROTOS_METRICS_H
-#define PROBANDOTPPROTOS_METRICS_H
+#ifndef TPPROTOS_METRICS_H
+#define TPPROTOS_METRICS_H
 
 #include <stdint.h>
 
@@ -16,4 +16,4 @@ typedef struct {
 //metrics proxy_metrics;
 
 
-#endif //PROBANDOTPPROTOS_METRICS_H
+#endif //TPPROTOS_METRICS_H
