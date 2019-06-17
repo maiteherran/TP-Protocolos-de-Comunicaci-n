@@ -483,7 +483,7 @@ handle_iteration(fd_selector s) {
         }
         if(ITEM_USED(item)) {
             time_t t = time(NULL);
-            if (difftime(t, item->timestamp) >= 20) {
+            if (difftime(t, item->timestamp) >= 90) {
                 /*
                  * si no se a registrado actividad en 90 segundos pasamos a liberaramos los recursos utilizados
                  * de esto se encarga la funicion registrada en timeout

@@ -52,6 +52,18 @@ int check_host_in_url(struct request_parser *p) {
     return 0;
 }
 
+void
+get_host_and_port_(struct request_parser *p) {
+    char aux[BUFFER_SIZE];
+    int port;
+    if (sscanf(p->request->host, "%[^:]:%d", aux, &port) == 2) {
+        p->request->port = port;
+    } else if (sscanf(p->request->host, "%[^:]", aux) == 1) {  // no hay puerto, solo host. Tomamos como default el puerto 80
+        p->request->port = 80;
+    }
+    strcpy(p->request->host, aux);
+}
+
 static void
 remaining_set(struct request_parser *p, int n) {
     p->i = 0;
@@ -86,6 +98,7 @@ header_host(const uint8_t c, struct request_parser *p) {
     enum request_state next;
     switch (c) {
         case '\r':
+//            get_host_and_port_(p);
             next = request_done;
             break;
         default:

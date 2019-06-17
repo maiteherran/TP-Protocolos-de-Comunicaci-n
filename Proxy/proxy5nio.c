@@ -28,11 +28,10 @@
 #define MSG_NOSIGNAL       0x4000
 
 // lista:
-// Host: bar:9090
+// ejecuto 2 transformaciones seguidas la segunda no termina
+// Host: bar:9090 todo: <-- a testear
 // cerrar bien en request y response
 // header accept
-// media types transformables
-// escuchar las 2 bocas y poner un timer en el selector de 90s si nadie me mando nada cierro
 // cat | gzip -d | cat
 
 /** maquina de estados general */
@@ -187,7 +186,7 @@ struct access_st {
 
 
 extern metrics proxy_metrics;
-extern conf proxy_configurations;
+extern conf    proxy_configurations;
 
 /*
  * Si bien cada estado tiene su propio struct que le da un alcance
@@ -629,9 +628,6 @@ connecting(struct selector_key *key) {
     struct proxy5     *p  = ATTACHMENT(key);
 
     if (getsockopt(key->fd, SOL_SOCKET, SO_ERROR, &error, &len) < 0) {
-        //TODO: no entendi bien este caso
-//        p->origin_resolution = p->origin_resolution->ai_next;
-//        return REQUEST_RESOLV; // pasasmos a buscar otra resolucion dns
         return O_ERROR;
     } else {
         if (error == 0) {
@@ -642,17 +638,13 @@ connecting(struct selector_key *key) {
             selector_set_interest(key->s, *d->origin_fd,
                                   OP_READ | OP_WRITE);
             return O_COMUNICATE;//REQUEST_WRITE;
-        } else { // la conexion no pude ser establecida, desregistramos el fd y cerramos
-//            selector_unregister_fd(key->s, key->fd);
-            /*
-             * el select se encarga de desregistrar fd's cerrados no desregistrados, si lo desregistro va a saltar un
-             * error al desregistrarlo "otra vez" en el metodo proxy_done
-             */
-            close(key->fd);
+        } else {
             p->origin_resolution = p->origin_resolution->ai_next;
             if (request_resolv_done(key) == ERROR) {
                 return O_ERROR;
             } else {
+                selector_unregister_fd(key->s, key->fd);
+                close(key->fd);
                 return CONNECTING;
             }
         }
@@ -773,11 +765,13 @@ origin_write(struct selector_key *key) {
 
 static void
 client_comunicate_init(const unsigned state, struct selector_key *key) {
+    struct proxy5      *p = ATTACHMENT(key);
     struct response_st *r = &ATTACHMENT(key)->response;
     struct request_st  *d = &ATTACHMENT(key)->request;
-    r->client_fd = &ATTACHMENT(key)->client_fd;
-    r->origin_fd = &ATTACHMENT(key)->origin_fd;
-    r->state     = RESPONSE_STATUS;
+    r->client_fd          = &ATTACHMENT(key)->client_fd;
+    r->origin_fd          = &ATTACHMENT(key)->origin_fd;
+    r->state              = RESPONSE_STATUS;
+
 //    buffer_compact(d->rb, 1);
 //    buffer_reset_read(d->rb);
 }
@@ -815,18 +809,18 @@ client_read(struct selector_key *key) {
 /* Escribimos la respuesta del origin server en el cliente*/
 static unsigned
 client_write(struct selector_key *key) {
-    struct access_st   *a               = &ATTACHMENT(key)->access;
-    int                trasformation_on = ATTACHMENT(key)->transformation_on;
-    buffer             *rb              = &ATTACHMENT(key)->write_buffer; // este es el que usa el origin para escribir
-    struct response_st *r               = &ATTACHMENT(key)->response;
-    int                *chunked_set     = &ATTACHMENT(key)->chunked_set;
+    struct access_st   *a                = &ATTACHMENT(key)->access;
+    int                *trasformation_on = &ATTACHMENT(key)->transformation_on;
+    buffer             *rb               = &ATTACHMENT(key)->write_buffer; // este es el que usa el origin para escribir
+    struct response_st *r                = &ATTACHMENT(key)->response;
+    int                *chunked_set      = &ATTACHMENT(key)->chunked_set;
+    unsigned           ret               = C_COMUNICATE;
     char               *read_ptr;
     size_t             count;
     ssize_t            n;
     char               header[BUFFER_SIZE];
     char               value[BUFFER_SIZE];
     char               *eol;                // pointer to end of line
-    unsigned           ret              = C_COMUNICATE;
 
     if (!buffer_can_read(rb)) {
         if (r->response_done) {
@@ -840,7 +834,6 @@ client_write(struct selector_key *key) {
     if (eol == NULL || ((eol - read_ptr) + 2) > count) { // no hay una linea completa recivida
         if (!buffer_can_write(rb)) { // si el buffer esta lleno y no hay una linea completa retornamos error
             //TODO: si ya envie algo no puedo reportar, mejor cerrar la conexion?
-            // report(*r->client_fd, REPORT_507);
             log_error("Se lleno el buffer y no podemos leer una linea completa de la respuesta");
             ret = ERROR;
         }
@@ -875,23 +868,24 @@ client_write(struct selector_key *key) {
                 if (strcasecmp(header, "Connection") ==
                     0) {  // enonctramos un header, chequeamso si es de conexion, si lo es no lo enviamos, queremos que sea no persistente
                     buffer_read_adv(rb, (eol - read_ptr) + 2);
-                } else if (trasformation_on && (strcasecmp(header, "Content-Length") ==
+                } else if (*trasformation_on && (strcasecmp(header, "Content-Type") == 0)) {
+                    if (proxy_configurations.media_types == NULL || strstr(proxy_configurations.media_types, value) ==
+                        NULL) { // no soportamos el media type a tranformar
+                        (*trasformation_on) = 0;
+                    }
+                    goto send;
+                } else if (*trasformation_on && (strcasecmp(header, "Content-Length") ==
                                                 0)) { // censuramos si esta la transforamcion activada
                     buffer_read_adv(rb, (eol - read_ptr) + 2);
-                } else if (trasformation_on && (strcasecmp(header, "Transfer-Encoding") == 0)) {
+                } else if (*trasformation_on && (strcasecmp(header, "Transfer-Encoding") == 0)) {
                     if (strcasecmp(value, "chunked") == 0) {
                         *chunked_set = 1;
-                        n = write(*r->client_fd, read_ptr, (eol - read_ptr) + 2);
-                        if (n > 0) {
-                            buffer_read_adv(rb, (eol - read_ptr) + 2);
-                        } else {
-                            log_error("Error en el cliente");
-                            ret = ERROR;
-                        }
+                        goto send;
                     } else { // censuramos si es distinto de chunked
                         buffer_read_adv(rb, (eol - read_ptr) + 2);
                     }
                 } else {
+                    send:
                     n = write(*r->client_fd, read_ptr, (eol - read_ptr) + 2); // mando el header
                     if (n > 0) {
                         buffer_read_adv(rb, (eol - read_ptr) + 2);
@@ -902,7 +896,7 @@ client_write(struct selector_key *key) {
                 }
             } else if (eol == read_ptr) { // es una linea vacia, a partir de ahora lo que sigue es el body
                 *eol = '\r';
-                if (trasformation_on) {
+                if (*trasformation_on) {
                     buffer_read_adv(rb, 2);
                 }
                 r->state = RESPONSE_BODY;
@@ -911,7 +905,7 @@ client_write(struct selector_key *key) {
             break;
         case RESPONSE_BODY:
         respone_body:
-            if (trasformation_on) {
+            if (*trasformation_on) {
                 if (!*chunked_set) {
                     char *trasfer_encoding_chunked_msg = "Transfer-Encoding: chunked\r\n";
                     n = write(*r->client_fd, trasfer_encoding_chunked_msg, strlen(trasfer_encoding_chunked_msg));
@@ -922,6 +916,7 @@ client_write(struct selector_key *key) {
                 }
                 ret = TRANSFORM;
             } else {
+                //TODO; if chunked set agregarlo, quiere decir que no se soporto el media type
                 ret = COPY_BODY;
             }
             break;
@@ -1001,6 +996,8 @@ http_body_write(struct selector_key *key) {
 // TRANSFORM
 ////////////////////////////////////////////////////////////////////////////////
 
+static const struct state_definition client_statbl[];
+
 static void
 transf_write(struct selector_key *key);
 
@@ -1050,7 +1047,7 @@ transf_read(struct selector_key *key) {
     }
 }
 
-/*lemos el response body guardado en el buffer y se lo pasamos al programa */ // TODO : como pija mando el eof
+/*lemos el response body guardado en el buffer y se lo pasamos al programa */
 static void
 transf_write(struct selector_key *key) {
     struct transform_st *t    = &ATTACHMENT(key)->transform;
@@ -1073,7 +1070,6 @@ transf_write(struct selector_key *key) {
     }
 
     read_ptr = buffer_read_ptr(buff, &count);
-
     /*
      * hago un backup de la cantidad que podemos leer, el decoder borro chuncks y trailers del buffer por lo que su contenido solo
      * puede disminuir, no aumentar. Este back up sirve para no perder el puntero a write, por lo que una vez hecho el decode avanzamos la cantidad leida
@@ -1083,28 +1079,22 @@ transf_write(struct selector_key *key) {
     if (ATTACHMENT(key)->chunked_set) {
         done = decode_chunked(&t->decoder, (char *) read_ptr, &count);
         if (done == 1) {
-            t->transform_done = 1;
-
+//            t->transform_done = 1;
             /* TODO: matamos al proceso esclavo ya que no queda nada por transfromar */
 
         }
-
     }
     ret = write(t->t_writefd, read_ptr, count);
     if (ret < 0) {
         return;
-        // cerramos la transformacion
     } else {
-
-        buffer_read_adv(buff,
-                        count_back_up); // todo: estoy asumiendo que esto se envio todo, caso que no deberia encerrarlo en un while?, si entra de nuevo va querer decodificar lo que leyo mezclandome el estado del decodificador
+        buffer_read_adv(buff, count_back_up);
     }
 }
 
 static void
 transf_close(struct selector_key *key) {
     struct transform_st *r = &ATTACHMENT(key)->transform;
-    //TODO:
 }
 
 static void
@@ -1128,8 +1118,9 @@ transform_init(const unsigned state, struct selector_key *key) {
 
     pid_t pid = fork();
     if (pid < 0) {
-        report(*r->client_fd, REPORT_TRANSFORMATION_ERROR);
-        // TODO: cerramos todo o que onda?
+        log_error("No se pudo ejecutar al proceso transformador");
+        proxy->client_stm.current = &client_statbl[COPY_BODY];
+        return;
     }
 
     if (pid == 0) {
@@ -1143,7 +1134,11 @@ transform_init(const unsigned state, struct selector_key *key) {
         close(outfd[0]); // cierro lectura en out
         close(STDERR_FILENO);
 
-        execl("/bin/sh", "sh", "-c", proxy_configurations.transformation_program, (char *) 0);
+        if (execl("/bin/sh", "sh", "-c", proxy_configurations.transformation_program, (char *) 0) == -1) {
+            /* se produjo un error, reportamos en los logs y pasamos a estado copia*/
+            log_error("No se pudo ejecutar al proceso transformador");
+            proxy->client_stm.current = &client_statbl[COPY_BODY];
+        }
     } else {
         r->slavePid = pid;
 
@@ -1156,18 +1151,14 @@ transform_init(const unsigned state, struct selector_key *key) {
         selector_fd_set_nio(r->t_writefd);
 
         if (SELECTOR_SUCCESS != selector_register(key->s, r->t_writefd, &transformation_handler, OP_WRITE, proxy)) {
-            report(*r->client_fd, REPORT_TRANSFORMATION_ERROR);
+            log_error("No se pudo ejecutar al proceso transformador");
+            proxy->client_stm.current = &client_statbl[COPY_BODY];
             return;
-
-            //TODO: llamao a la funcion proxy donde desde aca directo o medio villero?
-
         }
         if (SELECTOR_SUCCESS != selector_register(key->s, r->t_readfd, &transformation_handler, OP_READ, proxy)) {
-            report(*r->client_fd, REPORT_TRANSFORMATION_ERROR);
+            log_error("No se pudo ejecutar al proceso transformador");
+            proxy->client_stm.current = &client_statbl[COPY_BODY];
             return;
-
-
-            //TODO: llamao a la funcion proxy donde desde aca directo o medio villero?
         }
     }
 }
@@ -1250,10 +1241,6 @@ static const struct state_definition client_statbl[] = {
                 .state            = REQUEST_RESOLV,
                 .on_block_ready   = request_resolv_done,
         },
-//        {
-//                .state            = CONNECTING,
-//                .on_write_ready   = connecting,
-//        },
         {
                 .state            = C_COMUNICATE,
                 .on_arrival       = client_comunicate_init,
