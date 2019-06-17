@@ -1,4 +1,4 @@
-#include "client.h"
+#include "include/client.h"
 
 static bool            done        = false;
 static char            *address    = DEF_ADDRESS;
@@ -175,9 +175,8 @@ static bool hello() {
     datagram[3] = arg1;
     datagram[4] = arg2;
 
-    show_datagram(datagram, 4);
     int ret;
-    ret = sctp_sendmsg(socket_fd, (const void *) datagram, 4, NULL, 0, 0, 0, STREAM, 0, 0);
+    ret = sctp_sendmsg(socket_fd, (const void *) datagram, 5, NULL, 0, 0, 0, STREAM, 0, 0);
 
     if (ret == -1 || ret == 0) {
         show_connection_error();
@@ -371,9 +370,8 @@ static bool get_auth(const char *username, const char *password) {
         datagram[j + 4 + arglen1] = (uint8_t) password[j];
     }
 
-    show_datagram(datagram, arglen1 + arglen2 + 4);
     int ret;
-    ret = sctp_sendmsg(socket_fd, (const void *) datagram, arglen1 + arglen2 + 4, NULL, 0, 0, 0, STREAM, 0, 0);
+    ret = sctp_sctp_sendmsgmsg(socket_fd, (const void *) datagram, arglen1 + arglen2 + 4, NULL, 0, 0, 0, STREAM, 0, 0);
 
     if (ret == -1 || ret == 0) {
         show_connection_error();
@@ -484,7 +482,6 @@ static void get_metric(uint8_t metric) {
     datagram[4] = arglen2;
     datagram[5] = arg2;
 
-    show_datagram(datagram, 6);
     int ret;
     ret = sctp_sendmsg(socket_fd, (const void *) datagram, 6, NULL, 0, 0, 0, STREAM, 0, 0);
 
@@ -493,6 +490,7 @@ static void get_metric(uint8_t metric) {
     }
 
     ret = sctp_recvmsg(socket_fd, (void *) resp, MAX_DATAGRAM, (struct sockaddr *) NULL, 0, 0, 0);
+
     /*resp[0] = 0;
     resp[1] = 1;
     resp[2] = 4;
@@ -510,7 +508,7 @@ static void get_metric(uint8_t metric) {
 
         uint64_t acum = 0;
         for (int i    = 0; i < resp[2]; i++) {
-            acum += (resp[3 + i] << (8 * i));
+            acum += (resp[3 + i] << (8 * (resp[2] - 1 - i)));
         }
 
         switch (metric) {
@@ -583,17 +581,18 @@ static void set_media_types() {
     int      index = 6;
     unsigned size  = 6;
 
-    while (fgets(buffer, sizeof(buffer), stdin) != NULL && buffer[0] != 'q') {
+    if (fgets(buffer, sizeof(buffer), stdin) != NULL) {
 
         if (strlen(buffer) > 255) {
             printf("Please enter a shorter type.\n");
             return;
         }
 
-        arglen3 = (uint8_t) (strlen(buffer) + 1);
+        arglen3 = (uint8_t)(strlen(buffer) - 1);
+        buffer[arglen3]   = '\0';
         datagram[index++] = arglen3;
 
-        for (int i = 0; i < strlen(buffer) + 1 && buffer[i] != ' '; i++) {
+        for (int i = 0; i < strlen(buffer); i++) {
             datagram[index + i] = (uint8_t) buffer[i];
         }
 
@@ -601,33 +600,33 @@ static void set_media_types() {
         index += arglen3;
         size += (arglen3 + 1);
 
-        printf("Enter another media type or press 'q' to exit:\n");
-    }
 
-    datagram[1] = n_args;
+        datagram[1] = n_args;
 
-    show_datagram(datagram, size);
-    int ret;
-    ret = sctp_sendmsg(socket_fd, (const void *) datagram, size, NULL, 0, 0, 0, STREAM, 0, 0);
+        int ret;
+        ret = sctp_sendmsg(socket_fd, (const void *) datagram, size, NULL, 0, 0, 0, STREAM, 0, 0);
 
-    if (ret == -1 || ret == 0) {
-        restart_connection();
-    }
+        if (ret == -1 || ret == 0) {
+            restart_connection();
+        }
 
-    ret = sctp_recvmsg(socket_fd, (void *) resp, MAX_DATAGRAM, (struct sockaddr *) NULL, 0, 0, 0);
-    /*resp[0] = 0;
-    resp[1] = 0;*/
+        ret = sctp_recvmsg(socket_fd, (void *) resp, MAX_DATAGRAM, (struct sockaddr *) NULL, 0, 0, 0);
+        /*resp[0] = 0;
+        resp[1] = 0;*/
 
-    if (ret == -1 || ret == 0) {
-        restart_connection();
-    }
+        if (ret == -1 || ret == 0) {
+            restart_connection();
+        }
 
-    if (resp[0] == 0) {
-        printf("\nSuccess!\n");
+        if (resp[0] == 0) {
+            printf("\nSuccess!\n");
 
+        } else {
+            printf("\n");
+            show_error(resp[1]);
+        }
     } else {
-        printf("\n");
-        show_error(resp[1]);
+        fprintf(stderr, "Please enter a command.\n");
     }
 }
 
@@ -662,7 +661,6 @@ static void set_transformation_status() {
         datagram[6] = arglen3;
         datagram[7] = arg3;
 
-        show_datagram(datagram, 8);
         int ret;
         ret = sctp_sendmsg(socket_fd, (const void *) datagram, 8, NULL, 0, 0, 0, STREAM, 0, 0);
 
@@ -685,8 +683,6 @@ static void set_transformation_status() {
             printf("\n");
             show_error(resp[1]);
         }
-
-
     } else {
         fprintf(stderr, "Please enter a command.\n");
     }
@@ -709,8 +705,9 @@ static void set_transformation_program() {
         arg2    = SET_TRANSF_PRGM;
         arglen1 = 1;
         arglen2 = 1;
-        arglen3 = (uint8_t) (strlen(buffer) + 1); // agregamos el '\0' final
-        n_args  = 3;
+        arglen3 = (uint8_t)(strlen(buffer) - 1);
+        buffer[arglen3] = '\0';
+        n_args = 3;
         datagram[0] = cmd;
         datagram[1] = n_args;
         datagram[2] = arglen1;
@@ -718,11 +715,10 @@ static void set_transformation_program() {
         datagram[4] = arglen2;
         datagram[5] = arg2;
         datagram[6] = arglen3;
-        for (int i = 0; i < strlen(buffer) + 1 && buffer[i] != ' '; i++) {
+        for (int i = 0; i < strlen(buffer); i++) {
             datagram[7 + i] = (uint8_t) buffer[i];
         }
 
-        show_datagram(datagram, (unsigned) (7 + arglen3));
         int ret;
         ret = sctp_sendmsg(socket_fd, (const void *) datagram, 7 + arglen3, NULL, 0, 0, 0, STREAM, 0, 0);
 
@@ -762,7 +758,6 @@ static void quit() {
     datagram[0] = cmd;
     datagram[1] = n_args;
 
-    show_datagram(datagram, 2);
     int ret;
     ret = sctp_sendmsg(socket_fd, (const void *) datagram, 2, NULL, 0, 0, 0, STREAM, 0, 0);
 
@@ -800,7 +795,6 @@ static void get_transformation_program() {
     datagram[4] = arglen2;
     datagram[5] = arg2;
 
-    show_datagram(datagram, 6);
     int ret;
     ret = sctp_sendmsg(socket_fd, (const void *) datagram, 6, NULL, 0, 0, 0, STREAM, 0, 0);
 
@@ -856,7 +850,6 @@ static void get_transformation_status() {
     datagram[4] = arglen2;
     datagram[5] = arg2;
 
-    show_datagram(datagram, 6);
     int ret;
     ret = sctp_sendmsg(socket_fd, (const void *) datagram, 6, NULL, 0, 0, 0, STREAM, 0, 0);
 
@@ -901,7 +894,6 @@ static void get_media_types() {
     datagram[4] = arglen2;
     datagram[5] = arg2;
 
-    show_datagram(datagram, 6);
     int ret;
     ret = sctp_sendmsg(socket_fd, (const void *) datagram, 6, NULL, 0, 0, 0, STREAM, 0, 0);
 

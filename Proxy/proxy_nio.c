@@ -1200,7 +1200,7 @@ transform_write(struct selector_key *key) {
 
     if (!buffer_can_read(buff)) {
         if (r->transform_done) {
-            dprintf(*r->client_fd, "%x\r\n\r\n", 0);
+            dprintf(*r->client_fd, "\r\n%x\r\n\r\n", 0);
             return DONE;
         }
         return TRANSFORM;

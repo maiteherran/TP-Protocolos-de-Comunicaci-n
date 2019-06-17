@@ -295,12 +295,14 @@ static void hpcp_block(struct selector_key *key);
 
 static void hpcp_close(struct selector_key *key);
 
+static void hpcp_done(struct selector_key *key);
+
 static const struct fd_handler hpcp5_handler = {
         .handle_read    = hpcp_read,
         .handle_write   = hpcp_write,
         .handle_close   = hpcp_close,
         .handle_block   = hpcp_block,
-        .handle_timeout = NULL,
+        .handle_timeout = hpcp_done,
 };
 
 /** Intenta aceptar la nueva conexión entrante*/
