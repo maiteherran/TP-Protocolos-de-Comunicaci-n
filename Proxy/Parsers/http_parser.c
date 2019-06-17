@@ -259,7 +259,7 @@ request_is_done(const enum request_state st, bool *errored) {
     if (st >= request_error && errored != 0) {
         *errored = true;
     }
-    return st >= request_done;
+    return st == request_done;
 }
 
 extern enum request_state

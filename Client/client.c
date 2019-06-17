@@ -146,7 +146,7 @@ static bool hello() {
 
     show_datagram(datagram, 4);
     int ret;
-    ret = sctp_sendmsg(socket_fd, (const void *) datagram, 2, NULL, 0, 0, 0, STREAM, 0, 0);
+    ret = sctp_sendmsg(socket_fd, (const void *) datagram, 4, NULL, 0, 0, 0, STREAM, 0, 0);
 
     if (ret == -1 || ret == 0) {
         show_connection_error();
@@ -342,7 +342,7 @@ static bool get_auth(const char *username, const char *password) {
 
     show_datagram(datagram, arglen1 + arglen2 + 4);
     int ret;
-    ret = sctp_sendmsg(socket_fd, (const void *) datagram, 2, NULL, 0, 0, 0, STREAM, 0, 0);
+    ret = sctp_sendmsg(socket_fd, (const void *) datagram, arglen1 + arglen2 + 4, NULL, 0, 0, 0, STREAM, 0, 0);
 
     if (ret == -1 || ret == 0) {
         show_connection_error();
@@ -455,7 +455,7 @@ static void get_metric (uint8_t metric) {
 
     show_datagram(datagram, 6);
     int ret;
-    ret = sctp_sendmsg(socket_fd, (const void *) datagram, 2, NULL, 0, 0, 0, STREAM, 0, 0);
+    ret = sctp_sendmsg(socket_fd, (const void *) datagram, 6, NULL, 0, 0, 0, STREAM, 0, 0);
 
     if (ret == -1 || ret == 0) {
         restart_connection();
@@ -555,10 +555,10 @@ static void set_media_types() {
             return;
         }
 
-        arglen3 = (uint8_t) (strlen(buffer) - 1);
+        arglen3 = (uint8_t) (strlen(buffer) + 1);
         datagram[index++] = arglen3;
 
-        for (int i = 0; i < strlen(buffer) && buffer[i] != ' '; i++) {
+        for (int i = 0; i < strlen(buffer) + 1 && buffer[i] != ' '; i++) {
             datagram[index + i] = (uint8_t ) buffer[i];
         }
 
@@ -573,7 +573,7 @@ static void set_media_types() {
 
     show_datagram(datagram, size);
     int ret;
-    ret = sctp_sendmsg(socket_fd, (const void *) datagram, 2, NULL, 0, 0, 0, STREAM, 0, 0);
+    ret = sctp_sendmsg(socket_fd, (const void *) datagram, size, NULL, 0, 0, 0, STREAM, 0, 0);
 
     if (ret == -1 || ret == 0) {
         restart_connection();
@@ -629,7 +629,7 @@ static void set_transformation_status() {
 
         show_datagram(datagram, 8);
         int ret;
-        ret = sctp_sendmsg(socket_fd, (const void *) datagram, 2, NULL, 0, 0, 0, STREAM, 0, 0);
+        ret = sctp_sendmsg(socket_fd, (const void *) datagram, 8, NULL, 0, 0, 0, STREAM, 0, 0);
 
         if (ret == -1 || ret == 0) {
             restart_connection();
@@ -674,7 +674,7 @@ static void set_transformation_program() {
         arg2 = SET_TRANSF_PRGM;
         arglen1 = 1;
         arglen2 = 1;
-        arglen3 = (uint8_t) (strlen(buffer) - 1);
+        arglen3 = (uint8_t) (strlen(buffer) + 1); // agregamos el '\0' final
         n_args = 3;
         datagram[0] = cmd;
         datagram[1] = n_args;
@@ -683,13 +683,13 @@ static void set_transformation_program() {
         datagram[4] = arglen2;
         datagram[5] = arg2;
         datagram[6] = arglen3;
-        for (int i = 0; i < strlen(buffer) && buffer[i] != ' '; i++) {
+        for (int i = 0; i < strlen(buffer) + 1 && buffer[i] != ' '; i++) {
             datagram[7 + i] = (uint8_t ) buffer[i];
         }
 
         show_datagram(datagram, (unsigned) (7 + arglen3));
         int ret;
-        ret = sctp_sendmsg(socket_fd, (const void *) datagram, 2, NULL, 0, 0, 0, STREAM, 0, 0);
+        ret = sctp_sendmsg(socket_fd, (const void *) datagram, 7 + arglen3, NULL, 0, 0, 0, STREAM, 0, 0);
 
         if (ret == -1 || ret == 0) {
             restart_connection();
@@ -767,7 +767,7 @@ static void get_transformation_program() {
 
     show_datagram(datagram, 6);
     int ret;
-    ret = sctp_sendmsg(socket_fd, (const void *) datagram, 2, NULL, 0, 0, 0, STREAM, 0, 0);
+    ret = sctp_sendmsg(socket_fd, (const void *) datagram, 6, NULL, 0, 0, 0, STREAM, 0, 0);
 
     if (ret == -1 || ret == 0) {
         restart_connection();
@@ -823,7 +823,7 @@ static void get_transformation_status() {
 
     show_datagram(datagram, 6);
     int ret;
-    ret = sctp_sendmsg(socket_fd, (const void *) datagram, 2, NULL, 0, 0, 0, STREAM, 0, 0);
+    ret = sctp_sendmsg(socket_fd, (const void *) datagram, 6, NULL, 0, 0, 0, STREAM, 0, 0);
 
     if (ret == -1 || ret == 0) {
         restart_connection();
@@ -868,7 +868,7 @@ static void get_media_types() {
 
     show_datagram(datagram, 6);
     int ret;
-    ret = sctp_sendmsg(socket_fd, (const void *) datagram, 2, NULL, 0, 0, 0, STREAM, 0, 0);
+    ret = sctp_sendmsg(socket_fd, (const void *) datagram, 6, NULL, 0, 0, 0, STREAM, 0, 0);
 
     if (ret == -1 || ret == 0) {
         restart_connection();

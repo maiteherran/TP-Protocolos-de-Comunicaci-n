@@ -137,12 +137,43 @@ main(const int argc, const char **argv) {
 
 int server_init(int port, char *address, int protocol, const struct fd_handler *handler) {
     struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family      = AF_INET;
-    addr.sin_addr.s_addr = inet_addr(address); //htonl(INADDR_ANY);
-    addr.sin_port        = htons(port);
+    struct addrinfo    hint, *res = NULL;
+    int                ret, domain;
+//    addr.sin_family      = AF_UNSPEC;
 
-    const int server = socket(AF_INET, SOCK_STREAM, protocol);
+    memset(&addr, 0, sizeof(addr));
+    memset(&hint, 0, sizeof hint);
+    addr.sin_port = htons(port);
+    hint.ai_family = AF_UNSPEC;
+    hint.ai_flags  = AI_NUMERICHOST;
+
+    ret = getaddrinfo(address, NULL, &hint, &res);
+
+    if (ret) {
+        err_msg = "invalid address";
+        return -1;
+    }
+    if (res->ai_family == AF_INET) {
+        domain = AF_INET;
+        addr.sin_family = AF_INET;
+        if (inet_pton(AF_INET, address, &addr.sin_addr) != 1) {
+            goto error;
+        }
+    } else if (res->ai_family == AF_INET6) {
+        domain = AF_INET6;
+        addr.sin_family = AF_INET6;
+        if (inet_pton(AF_INET6, address, &addr.sin_addr) != 1) {
+            goto error;
+        }
+    } else {
+        error:
+        err_msg = "invalid address";
+        return -1;
+    }
+
+    freeaddrinfo(res);
+
+    const int server = socket(domain, SOCK_STREAM, protocol);
 
     if (server < 0) {
         err_msg = "unable to create socket";

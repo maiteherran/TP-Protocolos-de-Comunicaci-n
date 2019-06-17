@@ -30,7 +30,7 @@
 // lista:
 // ejecuto 2 transformaciones seguidas la segunda no termina
 // Host: bar:9090 todo: <-- a testear
-// cerrar bien en request y response
+// cerrar bien en request y response, si se produce error en el programa transformador abortar, ver como
 // header accept
 // cat | gzip -d | cat
 
@@ -54,14 +54,6 @@ enum proxy_v5state {
      *
      */
             REQUEST_RESOLV,
-    /*
-     * Conexion propiamente dicha con el origin server
-     *
-     * Transiciones:
-     * REQUEST_WRITE para enviar el request http del cliente al origin server
-     * REQUEST_RESOLV si no nos pudimos conectar volvemos al estado REQUEST_RESOLV buscando pidiendo otra resolucion dns
-     */
-//            CONNECTING,
     /*
      *
      *
@@ -124,8 +116,6 @@ enum proxy_v5_origin_state {
 
 ////////////////////////////////////////////////////////////////////
 // Definición de variables para cada estado
-
-/** usado por REQUEST_READ, REQUEST_WRITE, REQUEST_RESOLV */
 
 //struct t_request {
 //    char              *method, *path, *host, *body;
@@ -466,9 +456,14 @@ request_read(struct selector_key *key) {
         st = request_consume(buff, &d->parser, &error);
         if (request_is_done(st, &error)) {
             ret = request_process(key, d);
+        } else if (error) {
+            report(*d->client_fd, REPORT_400);
+            ret = ERROR;
         }
     } else if (n == 0) {
-        d->request_done = 1;
+        // habria terminado el request y no encontramos a donde conectarnos
+        report(*d->client_fd, REPORT_400);
+        ret = ERROR;
     } else {
         ret = ERROR;
     }
@@ -601,12 +596,9 @@ request_connect(struct selector_key *key, struct request_st *d) {
             close(*fd);
             *fd = -1;
         }
-        report(key->fd, REPORT_500);
         return ERROR;
     }
-//    selector_set_interest_key(key, OP_READ | OP_WRITE); // lectura del request
     return C_COMUNICATE;
-//    return CONNECTING;
 }
 
 
@@ -684,7 +676,8 @@ origin_read(struct selector_key *key) {
     } else if (recv == 0) {
         /*
          * Seteamos "Conection: close" en el request al origin, seguramente el cierre su conexion al terminar de enviar
-         * datos. En este punto el origin cerro la conexion es decir el request termino, prendo el flag asi cuando se
+         * datos.
+         * En este punto el origin cerro la conexion es decir el request termino, prendo el flag asi cuando se
          * acaban los datos del buffer pasamos al estado DONE
          */
         d->response_done = 1;
@@ -697,7 +690,7 @@ origin_read(struct selector_key *key) {
     return ret;
 }
 
-/* Escribimos el request del cliente en el origin server, agegamos el header Connection: close para indicarle que la conexion no sea persistente*/
+/* Escribimos el request del cliente en el origin server, agegamos el header Connection: close para indicarle que la conexion no sea persistente */
 static unsigned
 origin_write(struct selector_key *key) {
     struct request_st *d        = &ATTACHMENT(key)->request;
@@ -705,10 +698,8 @@ origin_write(struct selector_key *key) {
     unsigned          ret       = O_COMUNICATE;
     buffer            *buff     = &ATTACHMENT(key)->read_buffer; // este es el que usa el cliente para leer
     int               origin_fd = ATTACHMENT(key)->origin_fd;
-    uint8_t           *ptr;
     size_t            count;
     ssize_t           n;
-    size_t            size;
     char              *eol;
 
     if (!buffer_can_read(buff)) {
@@ -718,7 +709,7 @@ origin_write(struct selector_key *key) {
         return ret;
     }
 
-    char *read_ptr = (char *) buffer_read_ptr(buff, &size);
+    char *read_ptr = (char *) buffer_read_ptr(buff, &count);
 
     if (!d->header_close_added) {
         if ((eol = strstr(read_ptr, "\r\n")) != NULL) { // es la primera linea del request
@@ -733,7 +724,7 @@ origin_write(struct selector_key *key) {
             }
             // agregamos el header connection close, ya que no soportamos conexiones persistentes
             char *conection_close_msg = "Connection: close\r\n";
-            n = write(origin_fd, conection_close_msg, strlen(conection_close_msg));
+            n                     = write(origin_fd, conection_close_msg, strlen(conection_close_msg));
             if (n <= 0) {
                 log_error("Error en el origin server");
                 ret = O_ERROR;
@@ -744,11 +735,10 @@ origin_write(struct selector_key *key) {
         return ret;
     }
 
-    n = write(origin_fd, read_ptr, size);
+    n = write(origin_fd, read_ptr, count);
     if (n > 0) {
         buffer_read_adv(buff, n);
         proxy_metrics.transferred_bytes += n;
-        //printf("%.*s", (int) size, read_ptr);
     } else if (n == 0) {
         log_debug("cerro escritura el origin");
     } else {
@@ -768,10 +758,9 @@ client_comunicate_init(const unsigned state, struct selector_key *key) {
     struct proxy5      *p = ATTACHMENT(key);
     struct response_st *r = &ATTACHMENT(key)->response;
     struct request_st  *d = &ATTACHMENT(key)->request;
-    r->client_fd          = &ATTACHMENT(key)->client_fd;
-    r->origin_fd          = &ATTACHMENT(key)->origin_fd;
-    r->state              = RESPONSE_STATUS;
-
+    r->client_fd = &ATTACHMENT(key)->client_fd;
+    r->origin_fd = &ATTACHMENT(key)->origin_fd;
+    r->state     = RESPONSE_STATUS;
 //    buffer_compact(d->rb, 1);
 //    buffer_reset_read(d->rb);
 }
@@ -870,12 +859,12 @@ client_write(struct selector_key *key) {
                     buffer_read_adv(rb, (eol - read_ptr) + 2);
                 } else if (*trasformation_on && (strcasecmp(header, "Content-Type") == 0)) {
                     if (proxy_configurations.media_types == NULL || strstr(proxy_configurations.media_types, value) ==
-                        NULL) { // no soportamos el media type a tranformar
+                                                                    NULL) { // no soportamos el media type a tranformar
                         (*trasformation_on) = 0;
                     }
                     goto send;
                 } else if (*trasformation_on && (strcasecmp(header, "Content-Length") ==
-                                                0)) { // censuramos si esta la transforamcion activada
+                                                 0)) { // censuramos si esta la transforamcion activada
                     buffer_read_adv(rb, (eol - read_ptr) + 2);
                 } else if (*trasformation_on && (strcasecmp(header, "Transfer-Encoding") == 0)) {
                     if (strcasecmp(value, "chunked") == 0) {
@@ -1060,8 +1049,8 @@ transf_write(struct selector_key *key) {
 
     if (!buffer_can_read(buff)) {
         if (r->response_done) {
-            /* dejamos de pollear el fd de lectura
-             *no hay mas contenido que mandar, cerramos la el file descriptor de escritura
+            /* dejamos de pollear el fd de escritura
+             * no hay mas contenido que mandar, cerramos la el file descriptor de escritura
              */
             selector_set_interest(key->s, t->t_writefd, OP_NOOP);
             close(t->t_writefd);
@@ -1079,12 +1068,11 @@ transf_write(struct selector_key *key) {
     if (ATTACHMENT(key)->chunked_set) {
         done = decode_chunked(&t->decoder, (char *) read_ptr, &count);
         if (done == 1) {
-//            t->transform_done = 1;
-            /* TODO: matamos al proceso esclavo ya que no queda nada por transfromar */
-
+            selector_set_interest(key->s, t->t_writefd, OP_NOOP);
+            close(t->t_writefd);
         }
     }
-    ret = write(t->t_writefd, read_ptr, count);
+    ret                  = write(t->t_writefd, read_ptr, count);
     if (ret < 0) {
         return;
     } else {
@@ -1195,20 +1183,19 @@ transform_write(struct selector_key *key) {
         return TRANSFORM;
     }
     read_ptr = (char *) buffer_read_ptr(buff, &count);
-    dprintf(*r->client_fd, "\r\n%x\r\n",
-            (int) count); // TODO: que hacemos si write no manda la cantidad que yo especifique aca?
+    /* TODO: que hacemos si write no manda la cantidad que yo especifique aca? */
+    dprintf(*r->client_fd, "\r\n%x\r\n", (int) count);
     n = write(*r->client_fd, read_ptr, count);
     if (n > 0) {
         buffer_read_adv(buff, n);
     } else {
-        report(*r->client_fd, REPORT_TRANSFORMATION_ERROR);
         return ERROR;
     }
     return TRANSFORM;
 }
 
 
-static unsigned //leemos del origin server y guardamos un el buffer
+static unsigned
 transform_read(struct selector_key *key) {
 //    struct transform_st *r    = &ATTACHMENT(key)->transform;
 //    buffer              *buff = r->t_rb;
@@ -1230,6 +1217,7 @@ transform_read(struct selector_key *key) {
 //        return ERROR;
 //    }
 //
+//TODO: agregar un buffer para la lectura de la transformacion, si hay un post grande se va a chocar con lo que levante aca
     return TRANSFORM;
 }
 

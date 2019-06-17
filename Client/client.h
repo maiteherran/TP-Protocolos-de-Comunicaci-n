@@ -39,9 +39,9 @@
 #define GET_BYTES 0x04
 #define SET_CMD 0x04
 #define SET_CONF 0x00
-#define SET_TRANSF_PRGM 0x00
-#define SET_TRANSF_STAT 0x01
-#define SET_MEDIA 0x02
+#define SET_TRANSF_PRGM 0x01
+#define SET_TRANSF_STAT 0x02
+#define SET_MEDIA 0x04
 
 
 /**
