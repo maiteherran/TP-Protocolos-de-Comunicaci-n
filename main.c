@@ -4,19 +4,18 @@
 #include <limits.h>
 #include <errno.h>
 #include <signal.h>
-
 #include <unistd.h>
 #include <sys/types.h>   // socket
 #include <sys/socket.h>  // socket
 #include <netinet/in.h>
 #include <netinet/tcp.h>
-
 #include "Utils/selector.h"
 #include "Admin/admin.h"
 #include "Proxy/proxy5nio.h"
 #include "Utils/log.h"
 #include "Proxy/metrics.h"
 #include "Proxy/config.h"
+#include "Utils/server_arguments.h"
 
 metrics proxy_metrics;
 conf proxy_configurations;
@@ -55,6 +54,9 @@ const struct fd_handler admin_handler = {
 
 int
 main(const int argc, const char **argv) {
+
+    server_args_ptr args = read_arguments(argc, argv);
+
     if (argc != 3) {
         printf("Parameter: <Proxy Server Port>");
         printf("Parameter: <Admin Server Port>");
