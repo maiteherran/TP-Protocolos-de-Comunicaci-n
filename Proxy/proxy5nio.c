@@ -1130,9 +1130,12 @@ transform_init(const unsigned state, struct selector_key *key) {
         fflush(stderr);
         dup2(infd[0], STDIN_FILENO); // lectura
         dup2(outfd[1], STDOUT_FILENO); // escritura
+        if (freopen(proxy_configurations.error_file, "a", stderr) == NULL) {
+            // no se pudo redireccionar la salida de stderr, la cerramos
+            close(STDERR_FILENO);
+        }
         close(infd[1]); // cierro escritura en in
         close(outfd[0]); // cierro lectura en out
-        close(STDERR_FILENO);
 
         if (execl("/bin/sh", "sh", "-c", proxy_configurations.transformation_program, (char *) 0) == -1) {
             /* se produjo un error, reportamos en los logs y pasamos a estado copia*/

@@ -8,6 +8,7 @@ typedef struct {
     char     *transformation_program;
     unsigned transformation_on;
     char     *media_types;
+    char     *error_file;
 } conf;
 
 //conf proxy_configurations;

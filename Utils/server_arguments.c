@@ -78,8 +78,8 @@ static void init_args() {
     args->error_file = DEF_ERROR_FILE;
     args->version = DEF_VERSION;
     args->sub_version = DEF_SUB_VERS;
-    args->cmd = "";
-    args->media_types = "";
+    args->cmd = NULL; // vacio o en null?
+    args->media_types = NULL; // vacio o en null?
 }
 
 //todo: hacer extern las funciones de parse_version y parse_port del client para reutilizarlas

@@ -9,6 +9,7 @@
 #include <sys/socket.h>  // socket
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <arpa/inet.h>
 #include "Utils/selector.h"
 #include "Admin/admin.h"
 #include "Proxy/proxy5nio.h"
@@ -18,13 +19,13 @@
 #include "Utils/server_arguments.h"
 
 metrics proxy_metrics;
-conf proxy_configurations;
+conf    proxy_configurations;
 
-int server_init(int port, int protocol, const struct fd_handler * handler);
-
-void conf_init();
+int server_init(int port, char *address, int protocol, const struct fd_handler *handler);
 
 void metrics_init();
+
+void conf_init(char *media_types, char *transf_p, char *error_f);
 
 static bool done = false;
 
@@ -34,9 +35,9 @@ sigterm_handler(const int signal) {
     done = true;
 }
 
-const char *err_msg = NULL;
-selector_status ss = SELECTOR_SUCCESS;
-fd_selector selector = NULL;
+const char      *err_msg = NULL;
+selector_status ss       = SELECTOR_SUCCESS;
+fd_selector     selector = NULL;
 
 const struct fd_handler proxyv5 = {
         .handle_read       = proxyv5_passive_accept,
@@ -54,24 +55,8 @@ const struct fd_handler admin_handler = {
 
 int
 main(const int argc, const char **argv) {
-
-    server_args_ptr args = read_arguments(argc, argv);
-
-    if (argc != 3) {
-        printf("Parameter: <Proxy Server Port>");
-        printf("Parameter: <Admin Server Port>");
-        return 1;
-    }
-
-    unsigned proxy_port = atoi(argv[1]);
-    unsigned admin_port = atoi(argv[2]);
-
     // no tenemos nada que leer de stdin
     close(0);
-
-    logger_init();
-    conf_init();
-    metrics_init();
 
     // registrar sigterm es útil para terminar el programa normalmente.
     // esto ayuda mucho en herramientas como valgrind.
@@ -98,16 +83,22 @@ main(const int argc, const char **argv) {
         goto finally;
     }
 
-    int proxy_server = server_init(proxy_port, IPPROTO_TCP, &proxyv5);
-    int admin_server = server_init(admin_port, IPPROTO_TCP, &admin_handler);
+    server_args_ptr args = read_arguments(argc, argv);
+    logger_init();
+    metrics_init();
+    conf_init(args->media_types, args->cmd, args->error_file);
 
-    if (proxy_server  == -1|| admin_server == -1) {
+    int proxy_server = server_init(args->http_port, args->http_address, IPPROTO_TCP, &proxyv5);
+    int admin_server = server_init(args->admin_port, args->admin_address, IPPROTO_TCP,
+                                   &admin_handler); // TODO: pasar a IPPROTO_SCTP
+
+    if (proxy_server == -1 || admin_server == -1) {
         goto finally;
     }
 
     for (; !done;) {
         err_msg = NULL;
-        ss = selector_select(selector);
+        ss      = selector_select(selector);
         if (ss != SELECTOR_SUCCESS) {
             err_msg = "serving";
             goto finally;
@@ -144,12 +135,12 @@ main(const int argc, const char **argv) {
 }
 
 
-int server_init(int port, int protocol, const struct fd_handler * handler) {
+int server_init(int port, char *address, int protocol, const struct fd_handler *handler) {
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    addr.sin_port = htons(port);
+    addr.sin_family      = AF_INET;
+    addr.sin_addr.s_addr = inet_addr(address); //htonl(INADDR_ANY);
+    addr.sin_port        = htons(port);
 
     const int server = socket(AF_INET, SOCK_STREAM, protocol);
 
@@ -181,19 +172,21 @@ int server_init(int port, int protocol, const struct fd_handler * handler) {
         err_msg = "registering fd";
         return -1;
     }
-    return  server;
+    return server;
 }
 
 
-void conf_init() {
-    proxy_metrics.transferred_bytes = 0;
-    proxy_metrics.historic_accesses = 0;
+void metrics_init() {
+    proxy_metrics.transferred_bytes      = 0;
+    proxy_metrics.historic_accesses      = 0;
     proxy_metrics.concurrent_connections = 0;
 
 
 }
-void metrics_init() {
-    proxy_configurations.media_types = NULL;
-    proxy_configurations.transformation_on = 0;
-    proxy_configurations.transformation_program = NULL;
+
+void conf_init(char *media_types, char *transf_p, char *error_f) {
+    proxy_configurations.media_types            = media_types;
+    proxy_configurations.transformation_on      = 0;
+    proxy_configurations.transformation_program = transf_p;
+    proxy_configurations.error_file             = error_f;
 }
