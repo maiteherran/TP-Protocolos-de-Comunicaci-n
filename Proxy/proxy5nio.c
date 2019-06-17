@@ -29,7 +29,6 @@
 
 // lista:
 // ejecuto 2 transformaciones seguidas la segunda no termina
-// Host: bar:9090 todo: <-- a testear
 // cerrar bien en request y response, si se produce error en el programa transformador abortar, ver como
 // header accept
 // cat | gzip -d | cat

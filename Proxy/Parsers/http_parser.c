@@ -98,7 +98,7 @@ header_host(const uint8_t c, struct request_parser *p) {
     enum request_state next;
     switch (c) {
         case '\r':
-//            get_host_and_port_(p);
+            get_host_and_port_(p);
             next = request_done;
             break;
         default:
