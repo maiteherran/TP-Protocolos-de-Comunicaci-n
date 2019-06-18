@@ -826,6 +826,9 @@ client_write(struct selector_key *key) {
             log_error("Se lleno el buffer y no podemos leer una linea completa de la respuesta");
             ret = ERROR;
         }
+        if (r->response_done) {
+            ret = ERROR;
+        }
         return ret;
     }
 
