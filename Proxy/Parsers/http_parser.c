@@ -41,7 +41,6 @@ int check_host_in_url(struct request_parser *p) {
             *pathaux       = '/';
             *(pathaux + 1) = '\0';
         } else {
-            printf("Bad request\n");
             return 0;
         }
         p->request->port = cport;

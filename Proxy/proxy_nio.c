@@ -473,7 +473,6 @@ request_read(struct selector_key *key) {
 
 static unsigned
 request_process(struct selector_key *key, struct request_st *d) {
-    printf("%s", d->rb->read);
     pthread_t           tid;
     struct selector_key *k = malloc(sizeof(*key));
     memcpy(k, key, sizeof(*k));
@@ -624,9 +623,8 @@ connecting(struct selector_key *key) {
         return O_ERROR;
     } else {
         if (error == 0) {
-            selector_set_interest(key->s, *d->client_fd,
-                                  OP_READ |
-                                  OP_WRITE); // habiamos dejado de pollear al cliente, como nos conectamos pedimos lectura para ver si quedaba algo para leer
+            selector_set_interest(key->s, *d->client_fd, OP_READ | OP_WRITE);
+            // habiamos dejado de pollear al cliente, como nos conectamos pedimos lectura para ver si quedaba algo para leer
             *d->origin_fd = key->fd;
             selector_set_interest(key->s, *d->origin_fd,
                                   OP_READ | OP_WRITE);
@@ -912,7 +910,6 @@ client_write(struct selector_key *key) {
                 }
                 ret = TRANSFORM;
             } else {
-                //TODO; if chunked set agregarlo, quiere decir que no se soporto el media type
                 ret = COPY_BODY;
             }
             break;
@@ -1135,10 +1132,12 @@ transform_init(const unsigned state, struct selector_key *key) {
         fflush(stderr);
         dup2(infd[0], STDIN_FILENO); // lectura
         dup2(outfd[1], STDOUT_FILENO); // escritura
+
         if (freopen(proxy_configurations.error_file, "a", stderr) == NULL) {
             log_error("No se pudo redireccionar la salida de error");
             close(STDERR_FILENO);
         }
+
         close(infd[1]); // cierro escritura en in
         close(outfd[0]); // cierro lectura en out
 
@@ -1294,11 +1293,11 @@ static const struct state_definition origin_statbl[] = {
                 .on_read_ready    = origin_read,
         },
         {
-                .state                = O_DONE,
+                .state            = O_DONE,
 
         },
         {
-                .state                = O_ERROR,
+                .state            = O_ERROR,
         }
 };
 

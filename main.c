@@ -223,5 +223,6 @@ void conf_init(char *media_types, char *transf_p, char *error_f) {
         proxy_configurations.transformation_on = 1;
     } else {
         proxy_configurations.transformation_on = 0;
+        proxy_configurations.transformation_program = "cat";
     }
 }
