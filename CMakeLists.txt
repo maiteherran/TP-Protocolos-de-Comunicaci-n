@@ -3,11 +3,14 @@ project(TpProtos C)
 
 set(CMAKE_C_STANDARD 99)
 
-add_executable(TpProtos main.c main.h
-        Utils/netutils.c Utils/netutils.h
-        Utils/buffer.c Utils/buffer.h
-        Utils/selector.c Utils/selector.h
-        Utils/stm.c Utils/stm.h
-        Utils/server_arguments.c Utils/server_arguments.h
-        Proxy/proxy_nio.c Proxy/proxy_nio.h Proxy/Parsers/http_parser.c Proxy/Parsers/http_parser.h Proxy/Parsers/http_chunk_decoder.c Proxy/Parsers/http_chunk_decoder.h Proxy/proxy_reporter.c Proxy/proxy_reporter.h Utils/log.c Utils/log.h
-        Admin/HpcpParser/hpcpRequest.c Admin/HpcpParser/hpcpRequest.h Admin/admin_nio.c Admin/admin_nio.h Proxy/config.h Proxy/metrics.h Utils/string_utils.c Utils/string_utils.h Admin/auth.c Admin/auth.h)
+add_executable(TpProtos Server/main.c Server/main.h
+        Server/Utils/netutils.c Server/Utils/netutils.h
+        Server/Utils/buffer.c Server/Utils/buffer.h
+        Server/Utils/selector.c Server/Utils/selector.h
+        Server/Utils/stm.c Server/Utils/stm.h
+        Server/Utils/server_arguments.c Server/Utils/server_arguments.h
+        Server/Proxy/proxy_nio.c Server/Proxy/proxy_nio.h Server/Proxy/Parsers/http_parser.c Server/Proxy/Parsers/http_parser.h Server/Proxy/Parsers/http_chunk_decoder.c Server/Proxy/Parsers/http_chunk_decoder.h Server/Proxy/proxy_reporter.c Server/Proxy/proxy_reporter.h Server/Utils/log.c Server/Utils/log.h
+        Server/Admin/HpcpParser/hpcpRequest.c Server/Admin/HpcpParser/hpcpRequest.h Server/Admin/admin_nio.c Server/Admin/admin_nio.h Server/Proxy/config.h Server/Proxy/metrics.h Server/Utils/string_utils.c Server/Utils/string_utils.h Server/Admin/auth.c Server/Admin/auth.h)
+
+target_link_libraries(TpProtos pthread)
+target_link_libraries(TpProtos ${CMAKE_THREAD_LIBS_INIT} sctp)

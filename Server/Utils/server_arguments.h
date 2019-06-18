@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <ctype.h>
+#include <stdint.h>
 
 #define DEF_HTTP_ADDRESS "0.0.0.0"
 #define DEF_ADMIN_ADDRESS "127.0.0.1"
