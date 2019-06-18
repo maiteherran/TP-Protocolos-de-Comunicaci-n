@@ -10,6 +10,8 @@
 #include <time.h>
 #include <unistd.h>  // close
 #include <pthread.h>
+#include <netinet/in.h>
+#include <netinet/sctp.h>
 #include <arpa/inet.h>
 #include "../Utils/buffer.h"
 #include "../Utils/stm.h"
@@ -379,7 +381,7 @@ hello_read(struct selector_key *key) {
     }
 
     ptr = buffer_write_ptr(buff, &count);
-    n   = read(*r->client_fd, ptr, count);
+    n   = sctp_recvmsg(*r->client_fd, ptr, count, (struct sockaddr *) NULL, 0, 0, 0);
     if (n > 0) {
         buffer_write_adv(buff, n);
         st = hpcp_request_consume(buff, r->hpcp_parser, &error);
@@ -429,7 +431,7 @@ hello_write(struct selector_key *key) {
     }
 
     ptr = buffer_read_ptr(buff, &count);
-    n   = write(client_fd, ptr, count);
+    n   = sctp_sendmsg(client_fd, ptr, count, NULL, 0, 0, 0, 0, 0, 0);
     if (n > 0) {
         buffer_read_adv(buff, n);
         selector_set_interest_key(key, OP_READ);
@@ -468,7 +470,7 @@ auth_read(struct selector_key *key) {
     }
 
     ptr = buffer_write_ptr(buff, &count);
-    n   = read(*r->client_fd, ptr, count);
+    n   = sctp_recvmsg(*r->client_fd, ptr, count, (struct sockaddr *) NULL, 0, 0, 0);
     if (n > 0) {
         buffer_write_adv(buff, n);
         st = hpcp_request_consume(buff, r->hpcp_parser, &error);
@@ -519,7 +521,7 @@ auth_write(struct selector_key *key) {
     }
 
     ptr = buffer_read_ptr(buff, &count);
-    n   = write(client_fd, ptr, count);
+    n   = sctp_sendmsg(client_fd, ptr, count, NULL, 0, 0, 0, 0, 0, 0);
     if (n > 0) {
         buffer_read_adv(buff, n);
         selector_set_interest_key(key, OP_READ);
@@ -588,7 +590,7 @@ cmd_read(struct selector_key *key) {
     }
 
     ptr = buffer_write_ptr(buff, &count);
-    n   = read(*r->client_fd, ptr, count);
+    n   = sctp_recvmsg(*r->client_fd, ptr, count, (struct sockaddr *) NULL, 0, 0, 0);
     if (n > 0) {
         buffer_write_adv(buff, n);
         st = hpcp_request_consume(buff, r->hpcp_parser, &error);
@@ -678,7 +680,7 @@ static unsigned get_transformation_program(struct request_st *r) {
     int total_response_length = 2 + 1 +
                                 arglen; //minimo necesito 2 bytes para el response status y nresp, 1 para la longitud de la primer respuesta, sizeof(unisgned long long) para la respuesta
     if (n < total_response_length) {
-        return -1;
+        return REQUEST_ERROR;
     }
     buff[0] = r->response_status;
     buff[1] = 0x01;
@@ -697,7 +699,7 @@ static unsigned get_transformation_program_status(struct request_st *r) {
 
     int total_response_length = 4; //minimo necesito 2 bytes para el response status y nresp, 1 para la longitud de la primer respuesta, sizeof(unisgned long long) para la respuesta
     if (n < total_response_length) {
-        return -1;
+        return REQUEST_ERROR;
     }
     buff[0] = r->response_status;
     buff[1] = 0x01;
@@ -717,7 +719,7 @@ static unsigned get_media_types(struct request_st *r) {
     int total_response_length = 2 + 1 +
                                 arglen; //minimo necesito 2 bytes para el response status y nresp, 1 para la longitud de la primer respuesta, sizeof(unisgned long long) para la respuesta
     if (n < total_response_length) {
-        return -1;
+        return REQUEST_ERROR;
     }
     buff[0] = r->response_status;
     buff[1] = 0x01;
@@ -754,7 +756,7 @@ static unsigned get_concurrent_connections(struct request_st *r) {
     int total_response_length = 2 + 1 +
                                 sizeof(proxy_metrics.concurrent_connections); //minimo necesito 2 bytes para el response status y nresp, 1 para la longitud de la primer respuesta, sizeof(unisgned long long) para la respuesta
     if (n < total_response_length) {
-        return -1;
+        return REQUEST_ERROR;
     }
     buff[0] = r->response_status;
     buff[1] = 0x01;
@@ -778,7 +780,7 @@ static unsigned get_historic_accesses(struct request_st *r) {
     int total_response_length = 2 + 1 +
                                 sizeof(proxy_metrics.historic_accesses); //minimo necesito 2 bytes para el response status y nresp, 1 para la longitud de la primer respuesta, sizeof(unisgned long long) para la respuesta
     if (n < total_response_length) {
-        return -1;
+        return REQUEST_ERROR;
     }
     buff[0] = r->response_status;
     buff[1] = 0x01;
@@ -802,7 +804,7 @@ static unsigned get_transferred_bytes(struct request_st *r) {
     int total_response_length = 2 + 1 +
                                 sizeof(proxy_metrics.transferred_bytes); //minimo necesito 2 bytes para el response status y nresp, 1 para la longitud de la primer respuesta, sizeof(unisgned long long) para la respuesta
     if (n < total_response_length) {
-        return -1;
+        return REQUEST_ERROR;
     }
     buff[0] = r->response_status;
     buff[1] = 0x01;
@@ -856,7 +858,7 @@ static unsigned set_transformation_program(struct request_st *r) {
 
     int total_response_length = 2;
     if (n < total_response_length) {
-        return -1;
+        return REQUEST_ERROR;
     }
     char *aux = realloc(proxy_configurations.transformation_program, r->request.args_sizes[2]);
     if (aux == NULL) {
@@ -882,7 +884,7 @@ static unsigned set_transformation_program_status(struct request_st *r) {
 
     int total_response_length = 2; //minimo necesito 2 bytes para el response status y nresp, 1 para la longitud de la primer respuesta, sizeof(unisgned long long) para la respuesta
     if (n < total_response_length) {
-        return -1;
+        return REQUEST_ERROR;
     }
 
     if (r->request.args[2][0] > 0x01) {
@@ -906,7 +908,7 @@ static unsigned set_media_types(struct request_st *r) {
 
     int total_response_length = 2;
     if (n < total_response_length) {
-        return -1;
+        return REQUEST_ERROR;
     }
     char *aux = realloc(proxy_configurations.media_types, r->request.args_sizes[2]);
     if (aux == NULL) {
@@ -943,7 +945,7 @@ cmd_write(struct selector_key *key) {
     }
 
     ptr = buffer_read_ptr(buff, &count);
-    n   = write(client_fd, ptr, count);
+    n   = sctp_sendmsg(client_fd, ptr, count, NULL, 0, 0, 0, 0, 0, 0);
     if (n > 0) {
         buffer_read_adv(buff, n);
         selector_set_interest_key(key, OP_READ);
@@ -972,7 +974,7 @@ close_write(struct selector_key *key) {
     }
 
     ptr = buffer_read_ptr(buff, &count);
-    n   = write(client_fd, ptr, count);
+    n   = sctp_sendmsg(client_fd, ptr, count, NULL, 0, 0, 0, 0, 0, 0);
     if (n > 0) {
         buffer_read_adv(buff, n);
         selector_set_interest_key(key, OP_READ);
@@ -1001,7 +1003,7 @@ request_error_write(struct selector_key *key) {
     }
 
     ptr = buffer_read_ptr(buff, &count);
-    n   = write(client_fd, ptr, count);
+    n   = sctp_sendmsg(client_fd, ptr, count, NULL, 0, 0, 0, 0, 0, 0);
     if (n > 0) {
         buffer_read_adv(buff, n);
         selector_set_interest_key(key, OP_READ);
