@@ -90,8 +90,8 @@ main(const int argc, const char **argv) {
     conf_init(args->media_types, args->cmd, args->error_file);
 
     int proxy_server = server_init(args->http_port, args->http_address, IPPROTO_TCP, &proxy_handler);
-    int admin_server = server_init(args->admin_port, args->admin_address, IPPROTO_TCP,
-                                   &admin_handler); // TODO: pasar a IPPROTO_SCTP
+    int admin_server = server_init(args->admin_port, args->admin_address, IPPROTO_SCTP,
+                                   &admin_handler);
 
     if (proxy_server == -1 || admin_server == -1) {
         goto finally;

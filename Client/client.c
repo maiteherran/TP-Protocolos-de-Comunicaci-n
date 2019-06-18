@@ -1,4 +1,4 @@
-#include "include/client.h"
+#include "client.h"
 
 static bool            done        = false;
 static char            *address    = DEF_ADDRESS;
@@ -371,7 +371,7 @@ static bool get_auth(const char *username, const char *password) {
     }
 
     int ret;
-    ret = sctp_sctp_sendmsgmsg(socket_fd, (const void *) datagram, arglen1 + arglen2 + 4, NULL, 0, 0, 0, STREAM, 0, 0);
+    ret = sctp_sendmsg(socket_fd, (const void *) datagram, arglen1 + arglen2 + 4, NULL, 0, 0, 0, STREAM, 0, 0);
 
     if (ret == -1 || ret == 0) {
         show_connection_error();
