@@ -222,7 +222,19 @@ void conf_init(char *media_types, char *transf_p, char *error_f) {
     if (proxy_configurations.transformation_program != NULL) {
         proxy_configurations.transformation_on = 1;
     } else {
+        char const *tprogram = "cat";
+        size_t     len       = strlen(tprogram) + 1;
+        proxy_configurations.transformation_on      = 0;
+        proxy_configurations.transformation_program = malloc(len);
+        memcpy(proxy_configurations.transformation_program, tprogram, len - 1);
+        *(proxy_configurations.transformation_program + len - 1) = '\0';
+    }
+    if (proxy_configurations.media_types == NULL) {
+        char const *media = "";
+        size_t     len    = strlen(media) + 1;
         proxy_configurations.transformation_on = 0;
-        proxy_configurations.transformation_program = "cat";
+        proxy_configurations.media_types       = malloc(len);
+        memcpy(proxy_configurations.media_types, media, len - 1);
+        *(proxy_configurations.media_types + len - 1) = '\0';
     }
 }

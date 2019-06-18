@@ -588,8 +588,8 @@ static void set_media_types() {
             return;
         }
 
-        arglen3 = (uint8_t)(strlen(buffer) - 1);
-        buffer[arglen3]   = '\0';
+        arglen3 = (uint8_t)(strlen(buffer));
+        buffer[arglen3 - 1]   = '\0';
         datagram[index++] = arglen3;
 
         for (int i = 0; i < strlen(buffer); i++) {
@@ -705,8 +705,8 @@ static void set_transformation_program() {
         arg2    = SET_TRANSF_PRGM;
         arglen1 = 1;
         arglen2 = 1;
-        arglen3 = (uint8_t)(strlen(buffer) - 1);
-        buffer[arglen3] = '\0';
+        arglen3 = (uint8_t)(strlen(buffer));
+        buffer[arglen3 - 1] = '\0';
         n_args = 3;
         datagram[0] = cmd;
         datagram[1] = n_args;

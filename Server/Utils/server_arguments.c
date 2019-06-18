@@ -84,7 +84,7 @@ static void init_args() {
     args->version       = DEF_VERSION;
     args->sub_version   = DEF_SUB_VERS;
     args->cmd           = NULL; // vacio o en null?
-    args->media_types   = ""; // vacio o en null?
+    args->media_types   = NULL; // vacio o en null?
 }
 
 static void parse_version(const char *optarg) {
